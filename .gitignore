@@ -6,8 +6,6 @@ libdump
 docs/_site
 lib/bearssl/
 
-/src/
-
 .gitignore
 .DS_Store
 .gitmodules
