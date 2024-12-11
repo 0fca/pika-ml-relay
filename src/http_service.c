@@ -8,12 +8,7 @@ int compare_string(FIOBJ str, char* plain)
     return strcmp(mt, plain);
 }
 
-static void on_http_request(http_s *h) {
-  const int isPost = compare_string(h->method, "POST");
-  if(isPost == 0){
-    on_post_request(h);
-    return;
-  }
+static void on_chat_message(http_s *h) {
   FIOBJ json = h->body;
   int res = fiobj_data_save(json, "data.dump.json");
   if(res == 0)
@@ -21,6 +16,20 @@ static void on_http_request(http_s *h) {
       http_send_body(h, "dumped to file", 15);
   }
   http_send_body(h, "error", 5);
+  fiobj_free(json);
+}
+
+static void on_http_request(http_s *h) {
+  const char paths[5][256] = {"/chat/message", "/chat/session", "/chat/context", "/library/configure", ""};
+  for(int i = 0; i < (int)(sizeof(paths)/sizeof(char)); i++){
+    const char* path = paths[i];
+    const FIOBJ fiStrPath = fiobj_str_new(path, sizeof(path)/sizeof(char));
+    if(compare_string(fiStrPath, "/chat/message") == 0){
+      //on_chat_message(h);
+      printf("Test");
+    }
+    fiobj_free(fiStrPath);
+  }
 }
 
 /* starts a listeninng socket for HTTP connections. */
@@ -38,17 +47,4 @@ void initialize_http_service(void) {
     perror("ERROR: facil couldn't initialize HTTP service (already running?)");
     exit(1);
   }
-}
-
-void on_post_request(http_s *h)
-{
-  const int isPostPath = compare_string(h->path, "/path");
-  printf("%d", isPostPath);
-  if(isPostPath == 0)
-  {
-    http_send_body(h, "post path", 10);
-    return;
-  }
-  http_send_error(h, (size_t)405);
-  return;
 }
