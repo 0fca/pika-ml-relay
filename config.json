@@ -1,0 +1,6 @@
+{
+    "endpoints": [
+        "/chat/message",
+        "/chat/session"
+    ]
+}

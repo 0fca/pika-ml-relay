@@ -18,3 +18,4 @@ tests/xxhash.c
 tests/words.txt
 obj.obj
 a.exe
+data.dump.json

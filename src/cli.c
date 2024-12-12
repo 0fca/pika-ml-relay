@@ -35,7 +35,11 @@ void initialize_cli(int argc, char const *argv[]) {
                   "default: ~250Kb"),
       FIO_CLI_PRINT_HEADER("Redis support:"),
       FIO_CLI_STRING("-redis -r an optional Redis URL server address."),
-      FIO_CLI_PRINT("\t\ti.e.: redis://user:password@localhost:6379/"));
+      FIO_CLI_PRINT("\t\ti.e.: redis://user:password@localhost:6379/"),
+      FIO_CLI_PRINT_HEADER("Config Options"),
+      FIO_CLI_STRING("-cfg a mandatory configuration file path"),
+      FIO_CLI_PRINT("the param itself is optional, defaults to: config.json")
+    );
 
   /* Test and set any default options */
   if (!fio_cli_get("-b")) {
