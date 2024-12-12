@@ -1,6 +1,4 @@
-#include "fio_cli.h"
 #include "main.h"
-#include <stdio.h>
 
 static FIOBJ paths = FIOBJ_INVALID;
 
@@ -16,13 +14,10 @@ static void on_chat_message(http_s *h) {
   if(fiobj_type(json) == FIOBJ_T_NULL){
     http_send_error(h, (size_t)400);
   }
-  int res = fiobj_data_save(json, "data.dump.json");
-  if(res == 0)
-  {
-    http_send_body(h, "chat message", 13);
-  }
-  http_send_body(h, "error", 5);
-  fiobj_free(json);
+  char* response;
+  pass_chat_message("{\"model\":\"llama3.2\",\"stream\":false,\"messages\":[{\"content\":\"Dzie\u0144 dobry\",\"role\":\"user\"}]}", &response);
+  http_send_body(h, response, 13);
+   fiobj_free(json);
 }
 
 static void on_http_request(http_s *h) {
