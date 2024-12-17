@@ -585,7 +585,7 @@ $(DEST)/pkgconfig/facil.pc: makefile | libdump
 Name: facil.io\\n\
 Description: facil.io\\n\
 Cflags: -I%s\\n\
-Libs: -L%s -lfacil\\n\
+Libs: -L%s -lcurl -lfacil\\n\
 Version: %s\\n\
 Requires.private: %s\\n\
 " $(realpath $(DEST)/../libdump/include) $(realpath $(DEST)) 0.7.x "$(PKGC_REQ_EVAL)" > $@

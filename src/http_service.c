@@ -16,8 +16,8 @@ static void on_chat_message(http_s *h) {
   }
   char* response;
   pass_chat_message("{\"model\":\"llama3.2\",\"stream\":false,\"messages\":[{\"content\":\"Dzie\u0144 dobry\",\"role\":\"user\"}]}", &response);
-  http_send_body(h, response, 13);
-   fiobj_free(json);
+  //http_send_body(h, response, 13);
+  fiobj_free(json);
 }
 
 static void on_http_request(http_s *h) {

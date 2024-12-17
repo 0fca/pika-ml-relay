@@ -2,7 +2,6 @@
 #include "fio_cli.h"
 #include <string.h>
 #include <stdio.h>
-#include <curl/curl.h>
 #include "relay_client.h"
 
 #ifndef H_HTTP_SERVICE_H
