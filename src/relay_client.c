@@ -1,31 +1,31 @@
 #include "main.h"
 
-
-void on_response(http_s* h)
+static void on_response(http_s *h)
 {
-    if(h->status == 0){
-        printf("We just got successfully connected to the server, proceeding.");
-    }
-    if(h->status == 200)
+    if (h->status_str == FIOBJ_INVALID)
     {
-        printf("http_s should contain something right now.");
-        if(h->body != FIOBJ_INVALID)
-        {
-            FIOBJ stringified_resp = fiobj_obj2json(h->body, (uint8_t)1);
-            //TODO: Actually, relay it in Redis so it can be returned from http_service somehow.
-            char* string_resp = fiobj_obj2cstr(stringified_resp).data;
-            fiobj_free(stringified_resp);
-        }
+        http_finish(h);
+        return;
     }
+    /* Second response is actual response */
+    FIOBJ r = http_req2str(h);
+    fprintf(stderr, "%s\n", fiobj_obj2cstr(r).data);
+}
+
+static void on_request(http_s *h)
+{
+    h->method = fiobj_str_new("POST", 4);
 }
 
 void pass_chat_message(const char *message, char** response)
 {
-    intptr_t status = http_connect("http://192.168.1.253:11434/api/chat", NULL, .on_response = on_response);
+    intptr_t status = http_connect("http://127.0.0.1:11434/api/chat", NULL, .on_response = on_response, .on_request = on_request);
     if(status == 0){
-        printf("Everything seems to be just right.");
+        fprintf(stderr, "Everything seems to be just right.");
         *response = "relayed";
         return;
+    } else {
+        *response = "err";
+        return;
     }
-    *response = "err";
 }
