@@ -15,9 +15,7 @@ int compare_string(FIOBJ str, char* plain)
 char* read_string_since(char* str)
 {
   char* result = strsep(&str, "=");
-  fprintf(stderr, "%s",result);
   result = strsep(&str, "=");
-  fprintf(stderr, "%s", result);
   return result;
 }
 
@@ -47,22 +45,22 @@ void on_chat_message(http_s *h) {
     http_send_error(h, (size_t)400);
     return;
   }
-  char* sess_id_raw = strdup(fiobj_obj2cstr(h->query).data);
-  fprintf(stderr, "%ld", strlen(sess_id_raw) * sizeof(char) + 1);
-  char* res = sess_id_raw;//malloc(strlen(sess_id_raw) * sizeof(char) + 1);
-  //res = read_string_since(sess_id_raw);
+  char* sess_id_raw = fiobj_obj2cstr(h->query).data;
+  fprintf(stderr, "hs.c: %ld", strlen(sess_id_raw) * sizeof(char) + 1);
+  //char* res = sess_id_raw;//malloc(strlen(sess_id_raw) * sizeof(char) + 1);
+  sess_id_raw = read_string_since(sess_id_raw);
 
-  fprintf(stderr, "%s\n", res);
+  fprintf(stderr, "%s\n", sess_id_raw);
   if(is_post == 0){
     char* response;
     char* request_body = fiobj_obj2cstr(json).data;
-    pass_chat_message(res, request_body, &response);
+    pass_chat_message(sess_id_raw, request_body, &response);
     http_send_body(h, response, strlen(response));
   }
   if(compare_string(h->method, "GET") == 0){
-    int c_count = 6 + strlen(res);
+    int c_count = 6 + strlen(sess_id_raw);
     char* get_command_str = malloc(c_count * sizeof(char));
-    snprintf(get_command_str, c_count, "%s %s", "GET", res);
+    snprintf(get_command_str, c_count, "%s %s", "GET", sess_id_raw);
     FIOBJ get_command = fiobj_str_new(get_command_str, strlen(get_command_str));
     redis_engine_send(FIO_PUBSUB_DEFAULT, get_command, on_get_command, "");
   }
