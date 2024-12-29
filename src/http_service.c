@@ -1,7 +1,11 @@
 #include "main.h"
+#include <unistd.h>
+#include <sys/ipc.h>
+#include <sys/shm.h>
+
 
 static FIOBJ paths = FIOBJ_INVALID;
-static size_t is_chat_result = 0;
+static http_sse_s* hssi = NULL;
 
 // String functions
 
@@ -19,20 +23,6 @@ char* read_string_since(char* str)
   return result;
 }
 
-// Callbacks
-
-void on_get_command(fio_pubsub_engine_s* engine, FIOBJ reply, void *udata)
-{
-    if(reply == FIOBJ_INVALID)
-    {
-        fprintf(stderr, "It appears that there was an error on Redis op");
-    }
-    
-    //fprintf(stderr, "on_get_command: %s", fiobj_obj2cstr(reply).data);
-   
-    fprintf(stderr, "%p", udata);
-}
-
 void on_chat_message(http_s *h) {
   FIOBJ json = h->body;
   size_t is_post = compare_string(h->method, "POST");
@@ -48,20 +38,11 @@ void on_chat_message(http_s *h) {
   if(is_post == 0){
     char* response;
     char* request_body = fiobj_obj2cstr(json).data;
-    pass_chat_message(sess_id_raw, request_body, &response);
+    pass_chat_message(sess_id_raw, request_body, &response, hssi);
     http_send_body(h, response, strlen(response));
   }
   if(is_get == 0){
-    int c_count = 5 + strlen(sess_id_raw);
-    //char* get_command_str = malloc(c_count * sizeof(char));
-    //sprintf(get_command_str, "%s %s", "GET", sess_id_raw);
-    FIOBJ get_command = fiobj_ary_new();
-    fiobj_ary_push(get_command, fiobj_str_new("GET", 3));
-    fiobj_ary_push(get_command, fiobj_str_new(sess_id_raw, strlen(sess_id_raw)));
-    char* container;
-    redis_engine_send(FIO_PUBSUB_DEFAULT, get_command, on_get_command, container);
-    fprintf(stderr, "%s", container);
-    fiobj_free(get_command);
+    http_send_error(h, (size_t)400);
   }
   fiobj_free(json);
 }
@@ -79,11 +60,37 @@ static void on_http_request(http_s *h) {
   }
 }
 
+static void on_sse_open(http_sse_s* sse) {
+  hssi = http_sse_dup(sse);
+  http_sse_set_timout(hssi, fio_cli_get_i("-ping"));
+}
+
+static void on_sse_ready(http_sse_s* sse){
+  fprintf(stderr, "%s", "OK\n");
+}
+
+static void on_sse_cleanup(http_sse_s* sse){
+  http_sse_free(hssi);
+  http_sse_close(sse);
+}
+
+static void on_sse_close(http_sse_s* sse){
+  http_sse_free(hssi);
+  http_sse_close(sse);
+  fprintf(stderr, "%s\n", "DISCONN");
+}
+
+static void on_sse_upgrade(http_s* request, char* requested_protocol, size_t len)
+{
+  fprintf(stderr, "Upgrade request for: %s\n", requested_protocol);
+  http_upgrade2sse(request, .on_open = on_sse_open, 
+                  .on_ready = on_sse_ready, 
+                  .on_close = on_sse_close, 
+                  .on_shutdown = on_sse_cleanup
+  );
+}
+
 void initialize_http_service(void) {
-  /*FIOBJ s = fiobj_str_new("ollama_callback", 16);
-  fio_str_info_s channel = fiobj_obj2cstr(s);
-  fio_subscribe(.channel = channel, .on_message = on_channel_message);
-  fiobj_free(s);*/
   paths = fiobj_hash_new();
   const char* config_path = fio_cli_get("-cfg");
   FILE* config_f_struct;
@@ -124,6 +131,7 @@ void initialize_http_service(void) {
 
   if (http_listen(fio_cli_get("-p"), fio_cli_get("-b"),
                   .on_request = on_http_request,
+                  .on_upgrade = on_sse_upgrade,
                   .max_body_size = fio_cli_get_i("-maxbd") * 1024 * 1024,
                   .ws_max_msg_size = fio_cli_get_i("-max-msg") * 1024,
                   .public_folder = fio_cli_get("-public"),

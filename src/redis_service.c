@@ -20,5 +20,5 @@ void redis_callback(fio_pubsub_engine_s* engine, FIOBJ reply, void *udata)
         fprintf(stderr, "It appears that there was an error on Redis op");
     }
 
-    fprintf(stderr, "callback: %s", fiobj_obj2cstr(reply).data);
+    //fprintf(stderr, "callback: %s", fiobj_obj2cstr(reply).data);
 }

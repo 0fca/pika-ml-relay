@@ -3,7 +3,7 @@
 #include <sys/shm.h>
 
 static char* req_handle;
-static int sess_shm_id;
+static http_sse_s* hssi_g = NULL;
 
 static void on_response(http_s *h)
 {
@@ -11,34 +11,24 @@ static void on_response(http_s *h)
     {
         h->method = fiobj_str_new("POST", 4);
         FIOBJ json_container = FIOBJ_INVALID;
+        hssi_g = (http_sse_s*)h->udata;
         http_send_body(h, req_handle, strlen(req_handle));
         fiobj_free(json_container);
         return;
     }
-    char* shm_addr;
-    char* sess_handle = (char*)shmat(sess_shm_id, shm_addr, 0);
     fio_str_info_s ollama_res = fiobj_obj2cstr(h->body);
-    int data_len = ollama_res.len;
-    char* encoded_data = malloc(data_len * 8);
-    fio_base64_encode(encoded_data, ollama_res.data, data_len);
-    FIOBJ set_command = fiobj_ary_new();
-    fiobj_ary_push(set_command, fiobj_str_new("SET", 3));
-    fiobj_ary_push(set_command, fiobj_str_new(sess_handle, strlen(sess_handle)));
-    fiobj_ary_push(set_command, fiobj_str_new(encoded_data, strlen(encoded_data)));
-    redis_engine_send(FIO_PUBSUB_DEFAULT, set_command, redis_callback, NULL);
-    shmdt(sess_handle);
-    fiobj_free(set_command);
+    if(hssi_g != NULL){
+        fprintf(stderr, "%ld\n", hssi_g);
+        http_sse_write(hssi_g, .data = fiobj_obj2cstr(fiobj_str_new(ollama_res.data, strlen(ollama_res.data))), .event = { .data = "usermessage", .len = 11});
+        fprintf(stderr, "%s\n", "RELAY-OK"); 
+    }
 }
 
-void pass_chat_message(char* sess_id, char* request, char** response)
+void pass_chat_message(char* sess_id, char* request, char** response, http_sse_s* hssi)
 {
-    sess_shm_id = shmget(IPC_PRIVATE, 1024, IPC_CREAT | IPC_EXCL | S_IRUSR | S_IWUSR);
-    char* addr;
-    char* sess_handle = shmat(sess_shm_id, addr, 0);
-    sprintf(sess_handle, "%s", sess_id);
-    shmdt(sess_handle);
     req_handle = request;
-    intptr_t status = http_connect("http://192.168.1.253:11434/api/chat", NULL, .on_response = on_response);
+    http_sse_write(hssi, .data = { .data = sess_id, .len = strlen(sess_id) }, .event = { .data = "ctlmessage", .len = 10}, .retry = 10);
+    intptr_t status = http_connect("http://192.168.1.253:11434/api/chat", NULL, .on_response = on_response, .udata = hssi);
     FIOBJ hash = fiobj_hash_new();
     FIOBJ key = fiobj_str_new("process_id", 11);
     if(status != -1){
