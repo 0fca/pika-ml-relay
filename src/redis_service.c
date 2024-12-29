@@ -2,7 +2,7 @@
 
 void initialize_redis()
 {
-    fio_pubsub_engine_s *r = redis_engine_create(.address.data = "127.0.0.1");
+    fio_pubsub_engine_s *r = redis_engine_create(.address.data = "192.168.1.203");
     if (!r)
     {
         perror("Couldn't initialize Redis");
@@ -20,5 +20,5 @@ void redis_callback(fio_pubsub_engine_s* engine, FIOBJ reply, void *udata)
         fprintf(stderr, "It appears that there was an error on Redis op");
     }
 
-    fprintf(stderr, "%ld", fiobj_obj2cstr(reply).len);
+    fprintf(stderr, "callback: %s", fiobj_obj2cstr(reply).data);
 }

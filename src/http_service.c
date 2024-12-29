@@ -21,48 +21,47 @@ char* read_string_since(char* str)
 
 // Callbacks
 
-void on_channel_message(fio_msg_s *msg)
-{
-  is_chat_result = 1;
-}
-
 void on_get_command(fio_pubsub_engine_s* engine, FIOBJ reply, void *udata)
 {
     if(reply == FIOBJ_INVALID)
     {
         fprintf(stderr, "It appears that there was an error on Redis op");
     }
-
-    fprintf(stderr, fiobj_obj2cstr(reply).data);
-    //fprintf(stderr, "%s", (char*)udata);
+    
+    //fprintf(stderr, "on_get_command: %s", fiobj_obj2cstr(reply).data);
+   
+    fprintf(stderr, "%p", udata);
 }
 
 void on_chat_message(http_s *h) {
   FIOBJ json = h->body;
   size_t is_post = compare_string(h->method, "POST");
+  size_t is_get = compare_string(h->method, "GET");
   // TODO: To be extracted further
   if(fiobj_type(json) == FIOBJ_T_NULL && is_post == 0){
     http_send_error(h, (size_t)400);
-    return;
+    return; 
   }
   char* sess_id_raw = fiobj_obj2cstr(h->query).data;
-  fprintf(stderr, "hs.c: %ld", strlen(sess_id_raw) * sizeof(char) + 1);
-  //char* res = sess_id_raw;//malloc(strlen(sess_id_raw) * sizeof(char) + 1);
   sess_id_raw = read_string_since(sess_id_raw);
 
-  fprintf(stderr, "%s\n", sess_id_raw);
   if(is_post == 0){
     char* response;
     char* request_body = fiobj_obj2cstr(json).data;
     pass_chat_message(sess_id_raw, request_body, &response);
     http_send_body(h, response, strlen(response));
   }
-  if(compare_string(h->method, "GET") == 0){
-    int c_count = 6 + strlen(sess_id_raw);
-    char* get_command_str = malloc(c_count * sizeof(char));
-    snprintf(get_command_str, c_count, "%s %s", "GET", sess_id_raw);
-    FIOBJ get_command = fiobj_str_new(get_command_str, strlen(get_command_str));
-    redis_engine_send(FIO_PUBSUB_DEFAULT, get_command, on_get_command, "");
+  if(is_get == 0){
+    int c_count = 5 + strlen(sess_id_raw);
+    //char* get_command_str = malloc(c_count * sizeof(char));
+    //sprintf(get_command_str, "%s %s", "GET", sess_id_raw);
+    FIOBJ get_command = fiobj_ary_new();
+    fiobj_ary_push(get_command, fiobj_str_new("GET", 3));
+    fiobj_ary_push(get_command, fiobj_str_new(sess_id_raw, strlen(sess_id_raw)));
+    char* container;
+    redis_engine_send(FIO_PUBSUB_DEFAULT, get_command, on_get_command, container);
+    fprintf(stderr, "%s", container);
+    fiobj_free(get_command);
   }
   fiobj_free(json);
 }
@@ -81,10 +80,10 @@ static void on_http_request(http_s *h) {
 }
 
 void initialize_http_service(void) {
-  FIOBJ s = fiobj_str_new("ollama_callback", 16);
+  /*FIOBJ s = fiobj_str_new("ollama_callback", 16);
   fio_str_info_s channel = fiobj_obj2cstr(s);
   fio_subscribe(.channel = channel, .on_message = on_channel_message);
-  fiobj_free(s);
+  fiobj_free(s);*/
   paths = fiobj_hash_new();
   const char* config_path = fio_cli_get("-cfg");
   FILE* config_f_struct;

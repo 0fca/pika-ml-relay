@@ -19,19 +19,15 @@ static void on_response(http_s *h)
     char* sess_handle = (char*)shmat(sess_shm_id, shm_addr, 0);
     fio_str_info_s ollama_res = fiobj_obj2cstr(h->body);
     int data_len = ollama_res.len;
-    char* encoded_data = malloc(256);
+    char* encoded_data = malloc(data_len * 8);
     fio_base64_encode(encoded_data, ollama_res.data, data_len);
-    size_t set_count = 4 + strlen(sess_handle) + strlen(encoded_data);
-    char* set_str = malloc(set_count);
-    snprintf(set_str, set_count, "%s %s %s", "SET", (char*)sess_handle, encoded_data);
-    FIOBJ set_command = fiobj_str_new(set_str, strlen(set_str));
+    FIOBJ set_command = fiobj_ary_new();
+    fiobj_ary_push(set_command, fiobj_str_new("SET", 3));
+    fiobj_ary_push(set_command, fiobj_str_new(sess_handle, strlen(sess_handle)));
+    fiobj_ary_push(set_command, fiobj_str_new(encoded_data, strlen(encoded_data)));
     redis_engine_send(FIO_PUBSUB_DEFAULT, set_command, redis_callback, NULL);
-    FIOBJ s = fiobj_str_new("ollama_callback", 16);
-    fio_str_info_s channel = fiobj_obj2cstr(s);
-    FIOBJ m = fiobj_str_new(encoded_data, strlen(encoded_data));
-    fio_str_info_s message = fiobj_obj2cstr(m);
-    fio_publish(.engine = FIO_PUBSUB_ROOT, .channel = channel, .message = message, .is_json = 0);
     shmdt(sess_handle);
+    fiobj_free(set_command);
 }
 
 void pass_chat_message(char* sess_id, char* request, char** response)
@@ -42,7 +38,7 @@ void pass_chat_message(char* sess_id, char* request, char** response)
     sprintf(sess_handle, "%s", sess_id);
     shmdt(sess_handle);
     req_handle = request;
-    intptr_t status = http_connect("http://127.0.0.1:11434/api/chat", NULL, .on_response = on_response);
+    intptr_t status = http_connect("http://192.168.1.253:11434/api/chat", NULL, .on_response = on_response);
     FIOBJ hash = fiobj_hash_new();
     FIOBJ key = fiobj_str_new("process_id", 11);
     if(status != -1){

@@ -1,4 +1,5 @@
-#include "fio.h"
+#include <fio.h>
+#include <fiobj.h>
 
 #include "cli.h"
 #include "fio_cli.h"
