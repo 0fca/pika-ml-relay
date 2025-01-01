@@ -7,6 +7,7 @@
 #include "fio_cli.h"
 #include "http.h"
 #include "redis_engine.h"
+#include "log.h"
 
 static void redis_cleanup(void *e_) {
   redis_engine_destroy(e_);
@@ -36,9 +37,10 @@ void initialize_cli(int argc, char const *argv[]) {
       FIO_CLI_PRINT_HEADER("Redis support:"),
       FIO_CLI_STRING("-redis -r an optional Redis URL server address."),
       FIO_CLI_PRINT("\t\ti.e.: redis://user:password@localhost:6379/"),
-      FIO_CLI_PRINT_HEADER("Config Options"),
+      FIO_CLI_PRINT_HEADER("Pika ML relay Config Options"),
       FIO_CLI_STRING("-cfg a mandatory configuration file path"),
-      FIO_CLI_PRINT("the param itself is optional, defaults to: config.json")
+      FIO_CLI_STRING("-llog a non-mandatory parameter to change server's log level, defaults to INFO"),
+      FIO_CLI_BOOL("-q a non-mandatory parameter to prevent server from printing out logs at all, defaults to false")
     );
 
   /* Test and set any default options */

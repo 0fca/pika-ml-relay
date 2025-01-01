@@ -1,8 +1,10 @@
-#include "redis_engine.h"
+#include "main.h"
+
+static bool key_exists = false;
 
 void initialize_redis()
 {
-    fio_pubsub_engine_s *r = redis_engine_create(.address.data = "192.168.1.203");
+    fio_pubsub_engine_s *r = redis_engine_create(.address.data = "127.0.0.1");
     if (!r)
     {
         perror("Couldn't initialize Redis");
@@ -13,12 +15,34 @@ void initialize_redis()
     FIO_PUBSUB_DEFAULT = r;
 }
 
-void redis_callback(fio_pubsub_engine_s* engine, FIOBJ reply, void *udata)
+
+void on_redis_keys_command(fio_pubsub_engine_s* engine, FIOBJ reply, void *udata)
 {
+    key_exists = false;
     if(reply == FIOBJ_INVALID)
     {
-        fprintf(stderr, "It appears that there was an error on Redis op");
+        log_error("Couldn't read KEYS from Redis");
+        return;
     }
+    
+    char* key = fiobj_obj2cstr(fiobj_ary_pop(reply)).data;
+    log_debug("%s : %s", key, (char*)udata);
+    if(strcmp(key, (char*)udata) == 0)
+    {
+        key_exists = true;
+    }
+    log_debug("%d", key_exists);
+}
 
-    //fprintf(stderr, "callback: %s", fiobj_obj2cstr(reply).data);
+bool redis_contains_key(char* key)
+{
+    FIOBJ keys_command = fiobj_ary_new();
+    char* pattern = malloc(strlen(key) + 2);
+    sprintf(pattern, "%s", key);
+    fiobj_ary_push(keys_command, fiobj_str_new("KEYS", 4));
+    fiobj_ary_push(keys_command, fiobj_str_new(pattern, strlen(pattern)));
+    redis_engine_send(FIO_PUBSUB_DEFAULT, keys_command, on_redis_keys_command, key);
+    // shall rewrite it using fio_* functions for threads and locking
+    sleep(1);
+    return key_exists;
 }

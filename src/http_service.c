@@ -1,11 +1,11 @@
 #include "main.h"
-#include <unistd.h>
-#include <sys/ipc.h>
-#include <sys/shm.h>
 
 
 static FIOBJ paths = FIOBJ_INVALID;
-static http_sse_s* hssi = NULL;
+// hssi_s is actually a hash
+// volatile allows the server to run in 1 worker, but in multi-threaded mode
+// should move to IPC mechanism
+volatile FIOBJ hssi_s = FIOBJ_INVALID;
 
 // String functions
 
@@ -23,11 +23,10 @@ char* read_string_since(char* str)
   return result;
 }
 
-void on_chat_message(http_s *h) {
+static void on_chat_message(http_s *h) {
   FIOBJ json = h->body;
   size_t is_post = compare_string(h->method, "POST");
   size_t is_get = compare_string(h->method, "GET");
-  // TODO: To be extracted further
   if(fiobj_type(json) == FIOBJ_T_NULL && is_post == 0){
     http_send_error(h, (size_t)400);
     return; 
@@ -38,8 +37,12 @@ void on_chat_message(http_s *h) {
   if(is_post == 0){
     char* response;
     char* request_body = fiobj_obj2cstr(json).data;
+    FIOBJ key = fiobj_str_new(sess_id_raw, strlen(sess_id_raw));
+    http_sse_s* hssi = (http_sse_s*)fiobj_ptr_unwrap(fiobj_hash_get(hssi_s, key));
+    log_debug("HSSI L: %d\n", fiobj_hash_count(hssi_s));
     pass_chat_message(sess_id_raw, request_body, &response, hssi);
     http_send_body(h, response, strlen(response));
+    fiobj_free(key);
   }
   if(is_get == 0){
     http_send_error(h, (size_t)400);
@@ -61,43 +64,63 @@ static void on_http_request(http_s *h) {
 }
 
 static void on_sse_open(http_sse_s* sse) {
-  hssi = http_sse_dup(sse);
-  http_sse_set_timout(hssi, fio_cli_get_i("-ping"));
+  //http_sse_s* hssi = http_sse_dup(sse);
+  http_sse_set_timout(sse, fio_cli_get_i("-ping"));
+  
+  FIOBJ val = fiobj_ptr_wrap(sse);
+  FIOBJ skey = fiobj_str_new(sse->udata, strlen(sse->udata));
+  log_debug("OSO: %p", val);
+  int res = fiobj_hash_set(hssi_s, skey, val);
+  if(res == -1){
+    log_fatal("Moving sse object to shared hash failed.");
+  }
 }
 
 static void on_sse_ready(http_sse_s* sse){
-  fprintf(stderr, "%s", "OK\n");
+  log_debug("%s", "OK\n");
 }
 
 static void on_sse_cleanup(http_sse_s* sse){
-  http_sse_free(hssi);
-  http_sse_close(sse);
+  //http_sse_free(hssi);
 }
 
 static void on_sse_close(http_sse_s* sse){
-  http_sse_free(hssi);
-  http_sse_close(sse);
-  fprintf(stderr, "%s\n", "DISCONN");
+  FIOBJ skey = fiobj_str_new(sse->udata, strlen(sse->udata));
+  log_debug("%s :: %s\n", "TRY-DISCONN", sse->udata);
+  fiobj_hash_remove(hssi_s, skey);
+  log_debug("%s\n", "OK-DISCONN");
+  log_info("Session for %s disconnected", sse->udata);
 }
 
 static void on_sse_upgrade(http_s* request, char* requested_protocol, size_t len)
 {
-  fprintf(stderr, "Upgrade request for: %s\n", requested_protocol);
-  http_upgrade2sse(request, .on_open = on_sse_open, 
+  log_debug("UPREQ: %s\n", requested_protocol);
+  char* sess_id_raw = fiobj_obj2cstr(request->query).data;
+  if(compare_string(request->query, "null") == 0){
+    log_fatal("Missing query, aborting upgrade");
+    return;
+  }
+  sess_id_raw = read_string_since(sess_id_raw);
+  http_upgrade2sse(request, 
+                  .on_open = on_sse_open, 
                   .on_ready = on_sse_ready, 
                   .on_close = on_sse_close, 
-                  .on_shutdown = on_sse_cleanup
+                  .on_shutdown = on_sse_cleanup,
+                  .udata = strdup(sess_id_raw)
   );
 }
 
 void initialize_http_service(void) {
+  if(hssi_s == FIOBJ_INVALID){
+    hssi_s = fiobj_hash_new();
+  }
   paths = fiobj_hash_new();
   const char* config_path = fio_cli_get("-cfg");
   FILE* config_f_struct;
   config_f_struct = fopen(config_path, "r");
   if(config_f_struct == NULL){
     // Failover cause there is no config file, cannot proceed.
-    printf("Aborting because there is no config file.\n");
+    log_error("Aborting because there is no config file.");
     exit(-1);
   }
   int config_fd = fileno(config_f_struct);
@@ -139,7 +162,7 @@ void initialize_http_service(void) {
                   .timeout = fio_cli_get_i("-keep-alive"),
                   .ws_timeout = fio_cli_get_i("-ping")) == -1) {
     /* listen failed ?*/
-    perror("ERROR: facil couldn't initialize HTTP service (already running?)");
+    log_fatal("ERROR: facil couldn't initialize HTTP service (already running?)");
     exit(1);
   }
 }

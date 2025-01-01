@@ -19,3 +19,8 @@ tests/words.txt
 obj.obj
 a.exe
 data.dump.json
+
+./log/*
+*.sln
+./misc/dotnet-client
+./www
