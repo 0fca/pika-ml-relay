@@ -91,6 +91,11 @@ void initialize_cli(int argc, char const *argv[]) {
       FIO_LOG_ERROR("Failed to create redis engine object.");
     }
   }
+
+  if(!fio_cli_get_bool("-q"))
+  {
+      fio_cli_set("-q", "true");
+  }
 }
 
 void free_cli(void) { fio_cli_end(); }

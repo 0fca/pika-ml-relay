@@ -1,6 +1,7 @@
 #include "main.h"
 
 static bool key_exists = false;
+fio_lock_i inner_lock;
 
 void initialize_redis()
 {
@@ -31,7 +32,8 @@ void on_redis_keys_command(fio_pubsub_engine_s* engine, FIOBJ reply, void *udata
     {
         key_exists = true;
     }
-    log_debug("%d", key_exists);
+    log_debug("Session key exists: %d", (bool)key_exists);
+    fio_unlock(&inner_lock);
 }
 
 bool redis_contains_key(char* key)
@@ -41,8 +43,8 @@ bool redis_contains_key(char* key)
     sprintf(pattern, "%s", key);
     fiobj_ary_push(keys_command, fiobj_str_new("KEYS", 4));
     fiobj_ary_push(keys_command, fiobj_str_new(pattern, strlen(pattern)));
+    fio_trylock(&inner_lock);
     redis_engine_send(FIO_PUBSUB_DEFAULT, keys_command, on_redis_keys_command, key);
-    // shall rewrite it using fio_* functions for threads and locking
-    sleep(1);
+    await_for_lock(&inner_lock);
     return key_exists;
 }
