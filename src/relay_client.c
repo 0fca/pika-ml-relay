@@ -8,6 +8,23 @@ fio_lock_i lock, redis_lock, dwn_lock, tool_call_lock;
 static int shmid, shmfid;
 static FIOBJ session_container_g = FIOBJ_INVALID;
 
+static int iterate_over_args(FIOBJ o, void* parsed)
+{
+    char* param = fiobj_obj2cstr(o).data;
+    strcat(parsed, param);
+    strcat(parsed, " ");
+    return 0;
+}
+
+static void parse_arguments_hash(FIOBJ arguments, char* parsed)
+{
+    if(fiobj_type_is(arguments, FIOBJ_T_HASH) == 0)
+    {
+        return;
+    }
+    size_t ret = fiobj_each1(arguments, (size_t)0, iterate_over_args, parsed);
+}
+
 static FIOBJ retrieve_req_handle_as_fiobj()
 {
     FIOBJ handle = FIOBJ_INVALID;
@@ -28,12 +45,12 @@ static void update_curr_req_handle_messages(FIOBJ message)
 }
 
 // FIXME: Make this configurable to run more than just python scripts.
-static char* execute_tool(char *tool_engine)
+static char* execute_tool(char *tool_engine, char* parameters)
 {
     char *fname_addr;
     char *fname = shmat(shmfid, fname_addr, 0);
     char *cmd_str = malloc(256);
-    snprintf(cmd_str, 256, "bash -c \"%s %s\"", tool_engine, fname);
+    snprintf(cmd_str, 256, "bash -c \"%s %s %s\"", tool_engine, fname, parameters);
     FILE *fp;
     fp = popen(cmd_str, "r");
     if (fp == NULL)
@@ -169,6 +186,7 @@ static void apnd_toolsec2req(FIOBJ container)
     FIOBJ enginekey = fiobj_str_new("tool_engine", 11);
     FIOBJ namekey = fiobj_str_new("name", 4);
     FIOBJ desckey = fiobj_str_new("description", 11);
+    FIOBJ params = fiobj_str_new("params", 6);
     FIOBJ cmda = fiobj_hash_get(container, cmdskey);
     FIOBJ tool_section = fiobj_hash_new();
     FIOBJ tool_ary = fiobj_ary_new();
@@ -180,18 +198,23 @@ static void apnd_toolsec2req(FIOBJ container)
             FIOBJ cmd = fiobj_dup(fiobj_ary_index(cmda, i));
             if (fiobj_type_is(cmd, FIOBJ_T_HASH) == 1)
             {
-                char *tool_sec = malloc(1024); // FIXME: It should be somehow calculated based on name, description length and consolidated length of parameters
+                char *tool_sec = malloc(2048); // FIXME: It should be somehow calculated based on name, description length and consolidated length of parameters
                 FIOBJ tool_url = fiobj_hash_get(cmd, urlkey);
                 FIOBJ tool_engine = fiobj_hash_get(cmd, enginekey);
                 char *url = fiobj_obj2cstr(tool_url).data;
                 char *engine = fiobj_obj2cstr(tool_engine).data;
-
                 char *name = fiobj_obj2cstr(fiobj_hash_get(cmd, namekey)).data;
                 char *description = fiobj_obj2cstr(fiobj_hash_get(cmd, desckey)).data;
-                log_debug("REQ-PREP: %s, %s", url, engine);
-                download_tool(url, engine, name);
+                char* params_json_str = fiobj_obj2cstr(fiobj_hash_get(cmd, params)).data;
 
-                snprintf(tool_sec, 1024, "{\"type\":\"function\", \"function\":{\"name\": \"%s\", \"description\": \"%s\"}}", name, description);
+                log_debug("REQ-PREP: %s, %s", url, engine);
+                log_debug(params_json_str);
+                download_tool(url, engine, name);
+                FIOBJ parsed_params_json = FIOBJ_INVALID;
+                fiobj_json2obj(&parsed_params_json, params_json_str, strlen(params_json_str));
+                char* params = fiobj_obj2cstr(fiobj_obj2json(parsed_params_json, 0)).data;
+                snprintf(tool_sec, 2048, "{\"type\":\"function\", \"function\":{\"name\": \"%s\", \"description\": \"%s\", \"parameters\": %s}}", name, description, params);
+                log_debug(tool_sec);
                 FIOBJ tool_sec_obj = FIOBJ_INVALID;
                 fiobj_json2obj(&tool_sec_obj, strdup(tool_sec), strlen(tool_sec));
                 fiobj_ary_push(tool_ary, tool_sec_obj);
@@ -225,6 +248,7 @@ static void on_tool_call(http_s *h)
         FIOBJ content = fiobj_str_new("content", 7);
         FIOBJ name = fiobj_str_new("tool_name", 9);
         FIOBJ fcall_key = fiobj_str_new("fcall", 4);
+        FIOBJ argskey = fiobj_str_new("args", 4);
         FIOBJ fcall = fiobj_hash_get(container, fcall_key);
         fio_str_info_s content_info = fiobj_obj2cstr(fiobj_hash_get(container, content));
         fio_str_info_s name_info = fiobj_obj2cstr(fiobj_hash_get(container, name));
@@ -263,11 +287,13 @@ static void on_response(http_s *h)
     if (hssi_g != NULL)
     {
         FIOBJ ollama_response_obj = FIOBJ_INVALID;
+        log_debug(ollama_res.data);
         fiobj_json2obj(&ollama_response_obj, ollama_res.data, strlen(ollama_res.data));
         if (fiobj_type_is(ollama_response_obj, FIOBJ_T_HASH) == 1)
         {
             FIOBJ message_key = fiobj_str_new("message", 7);
             FIOBJ tool_calls_key = fiobj_str_new("tool_calls", 10);
+
             FIOBJ message = fiobj_hash_get(ollama_response_obj, message_key);
             if (fiobj_hash_haskey(message, tool_calls_key) != 1)
             {
@@ -281,9 +307,11 @@ static void on_response(http_s *h)
                 fio_trylock(&tool_call_lock);
                 FIOBJ fcall = fiobj_ary_index(fcalls, i);
                 FIOBJ fkey = fiobj_str_new("function", 8);
+                FIOBJ argkey = fiobj_str_new("arguments", 9);
                 FIOBJ func = fiobj_hash_get(fcall, fkey);
                 FIOBJ fnamekey = fiobj_str_new("name", 4);
                 FIOBJ fname = fiobj_hash_get(func, fnamekey);
+                FIOBJ args = fiobj_hash_get(func, argkey);
                 FIOBJ cmds = fiobj_hash_get(session_container_g, fiobj_str_new("cmds", 4));
                 for (size_t j = 0; j < fiobj_ary_count(cmds); j++)
                 {
@@ -293,7 +321,10 @@ static void on_response(http_s *h)
                     char *curr_tool_name = fiobj_obj2cstr(fiobj_hash_get(cmd, fnamekey)).data;
                     if (strcmp(curr_tool_name, fiobj_obj2cstr(fname).data) == 0)
                     {
-                        char* output = execute_tool(tool_engine_str);
+                        char* params = malloc(2048);
+                        memset(params, 0, 2048);
+                        parse_arguments_hash(args, params);
+                        char* output = execute_tool(tool_engine_str, params);
                         await_for_lock(&tool_call_lock);
                         fio_str_info_s await_tool_call = fiobj_obj2cstr(fiobj_str_new("AWAIT TOOL CALL", 15));
                         http_sse_write(hssi_g, .id = {.data = hssi_g->udata, .len = strlen(hssi_g->udata)}, .data = await_tool_call, .event = {.data = "ctlmessage", .len = 10});
@@ -304,7 +335,7 @@ static void on_response(http_s *h)
                         fiobj_hash_set(container, fiobj_str_new("fcall", 4), message);
                         FIOBJ *contain_ptr = fio_malloc(sizeof(*contain_ptr));
                         *contain_ptr = container;
-                        intptr_t tool_result_status = http_connect("http://192.168.1.253:11434/api/chat", NULL, .on_response = on_tool_call, .udata = contain_ptr);
+                        intptr_t tool_result_status = http_connect("http://192.168.1.203:11434/api/chat", NULL, .on_response = on_tool_call, .udata = contain_ptr);
                         log_debug("%s", "RELAY-OK");
                         break;
                     }
