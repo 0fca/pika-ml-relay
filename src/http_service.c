@@ -30,7 +30,7 @@ static void on_chat_message(http_s *h) {
     pass_chat_message(sess_id_raw, request_body, &response, hssi);
     if(strcmp(response, "no_id") == 0)
     {
-      http_set_header(h, fiobj_str_new("Precondition", 13), fiobj_str_new("Sent too early, first initiate SSE connection", 46));
+      http_set_header(h, fiobj_str_new("X-Precondition", 13), fiobj_str_new("Sent too early, first initiate SSE connection", 46));
       char* loc_value = malloc(strlen(sess_id_raw)+9);
       sprintf(loc_value, "/sess_id=%s", sess_id_raw);
       http_set_header(h, fiobj_str_new("Location", 9), fiobj_str_new(loc_value, strlen(loc_value)));
@@ -72,9 +72,6 @@ static void on_sse_open(http_sse_s* sse) {
   }
 }
 
-static void on_sse_ready(http_sse_s* sse){
-  log_debug("%s", "OK");
-}
 
 static void on_sse_cleanup(http_sse_s* sse){
   //http_sse_free(hssi);
@@ -99,7 +96,6 @@ static void on_sse_upgrade(http_s* request, char* requested_protocol, size_t len
   sess_id_raw = read_string_since(sess_id_raw, "=");
   http_upgrade2sse(request, 
                   .on_open = on_sse_open, 
-                  .on_ready = on_sse_ready, 
                   .on_close = on_sse_close, 
                   .on_shutdown = on_sse_cleanup,
                   .udata = strdup(sess_id_raw)

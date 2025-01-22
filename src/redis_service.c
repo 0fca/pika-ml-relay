@@ -5,7 +5,7 @@ fio_lock_i inner_lock;
 
 void initialize_redis()
 {
-    fio_pubsub_engine_s *r = redis_engine_create(.address.data = "127.0.0.1");
+    fio_pubsub_engine_s *r = redis_engine_create(.address.data = "192.168.1.15");
     if (!r)
     {
         perror("Couldn't initialize Redis");

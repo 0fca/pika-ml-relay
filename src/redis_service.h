@@ -1,6 +1,7 @@
 #include <stdbool.h>
-#define GET "GET"
-#define GET_L 3
+// We use HGET because .NET library used by ApiService uses hashes to store strings.
+#define GET "HGET"
+#define GET_L 4
 
 
 void initialize_redis();

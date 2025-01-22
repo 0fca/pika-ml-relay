@@ -490,6 +490,10 @@ else
   $(info * No compatible SSL/TLS library detected.)
 endif
 
+
+CURL_LDFLAGS ?= "-lcurl"
+LDFLAGS += $(CURL_LDFLAGS)
+
 # S2N TLS/SSL library: https://github.com/awslabs/s2n
 ifeq ($(call TRY_COMPILE, "\#include <s2n.h>\\n int main(void) {}", "-ls2n") , 0)
   $(info * Detected the s2n library, setting HAVE_S2N)
