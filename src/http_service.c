@@ -7,7 +7,92 @@ static FIOBJ paths = FIOBJ_INVALID;
 // should move to IPC mechanism
 volatile FIOBJ hssi_s = FIOBJ_INVALID;
 
-// String functions
+fio_lock_i memory_execution_lock;
+
+static char* rhmem = NULL;
+static size_t rhsize;
+
+// Helper functions
+
+static void* create_shared_memory(size_t size)
+{
+  int protection = PROT_READ | PROT_WRITE;
+  int visibility = MAP_SHARED | MAP_ANONYMOUS;
+  return mmap(NULL, size, protection, visibility, -1, 0);
+}
+
+static void erase_shmem(size_t size)
+{
+  int r = munmap(NULL, size);
+  if(r != 0)
+  {
+    log_error("%s", "Failed to unmap memory");
+  }
+}
+
+static void on_memory_header_present(http_s *h)
+{
+  FIOBJ headers = h->headers;
+  FIOBJ r = http_req2str(h);
+  log_debug("MEM-REQ: %s", fiobj_obj2cstr(r).data);
+  FIOBJ mem_hdr_key = fiobj_str_new("x-memory", 8);
+  int is_present = fiobj_hash_haskey(headers, mem_hdr_key);
+  log_debug("USE-MEM: %d", is_present);
+  if(is_present == 1)
+  {
+    FIOBJ memory_config = fiobj_hash_get(headers, mem_hdr_key);
+    log_debug("HDR-TYPE: %s", fiobj_type_name(memory_config));
+    if(fiobj_type_is(memory_config, FIOBJ_T_STRING) == 1)
+    {
+      fio_str_info_s b = fiobj_obj2cstr(h->body);
+      char* msg = newest_message_from_request(b.data);
+      char* model = malloc(MODEL_NAME_L);
+      FIOBJ query_cp = fiobj_str_copy(h->query);
+      char* sessid = fiobj_obj2cstr(query_cp).data;
+      sessid = read_string_since(sessid, "=");
+      extract_model(&model, b.data);
+      log_debug("%s, \"%s\", %s", model, msg, sessid);
+      size_t alloc_size = strlen(msg) + strlen(model) + strlen(sessid);
+      char* memory_params = malloc(alloc_size);
+      sprintf(memory_params, "%s %s", model, sessid);
+      FILE *fp;
+      char* fname = malloc(strlen(sessid)+14); // + 14 because we add _message suffix to it
+      sprintf(fname, "tools/%s_message", sessid);
+      fp = fopen(fname, "w");
+      fprintf(fp, "%s", msg);
+      fclose(fp);
+      log_debug("Mem Params: %s", memory_params);
+      // Memory script shall be deployed not as a tool, but with a server itself or configured through .json
+      char* memory_result = malloc(16834);
+      fio_trylock(&memory_execution_lock);
+      execute_tool(&memory_result, "python", "tools/memory.py", memory_params, memory_execution_lock);
+      await_for_lock(&memory_execution_lock);
+      log_debug("MEM_RES: %s", memory_result);
+      FIOBJ memory_message = fiobj_hash_new();
+      // FIXME: Move keys and value objects into refference access variable, so those could be freed
+      fiobj_hash_set(memory_message, fiobj_str_new("role", 4), fiobj_str_new("system", 6));
+      fiobj_hash_set(memory_message, fiobj_str_new("content", 7), fiobj_str_new(memory_result, strlen(memory_result)));
+      char* req_handle = malloc(b.len);
+      sprintf(req_handle, "%s", b.data);
+      push_on_top_curr_req_messages(memory_message, &req_handle);
+      rhsize = strlen(req_handle);
+      if(rhmem == NULL){
+        rhmem = (char*)create_shared_memory(rhsize);
+      }
+      log_debug("RH: %s", req_handle);
+      strncpy(rhmem, req_handle, rhsize);
+      fiobj_free(query_cp);
+      fiobj_free(headers);
+      fiobj_free(r);
+      fiobj_free(mem_hdr_key);
+      fiobj_free(memory_config);
+      free(fname);
+      free(memory_params);
+      //free(req_handle);
+      //free(memory_result);
+    }
+  }
+}
 
 static void on_chat_message(http_s *h) {
   FIOBJ json = h->body;
@@ -17,16 +102,30 @@ static void on_chat_message(http_s *h) {
     http_send_error(h, (size_t)400);
     return; 
   }
-  char* sess_id_raw = fiobj_obj2cstr(h->query).data;
+  FIOBJ query_cp = fiobj_str_copy(h->query);
+  char* sess_id_raw = fiobj_obj2cstr(query_cp).data;
+  log_debug("%s", sess_id_raw);
   sess_id_raw = read_string_since(sess_id_raw, "=");
 
   if(is_post == 0){
     char* response;
-    char* request_body = fiobj_obj2cstr(json).data;
+    log_debug("%d", rhsize);
+    char* request_body = malloc(rhsize);
+    if(rhmem == NULL){
+      //request_body = fiobj_obj2cstr(json).data;
+      fio_str_info_s rb = fiobj_obj2cstr(json);
+      strncpy(request_body, rb.data, rb.len);
+    } 
+    else 
+    {
+      strncpy(request_body, rhmem, rhsize);
+      log_debug("HND: %s %s", request_body, (char*)rhmem);
+      erase_shmem(rhsize);
+    }
     FIOBJ key = fiobj_str_new(sess_id_raw, strlen(sess_id_raw));
     http_sse_s* hssi = (http_sse_s*)fiobj_ptr_unwrap(fiobj_hash_get(hssi_s, key));
     log_debug("HSSI handles count: %d", fiobj_hash_count(hssi_s));
-    
+    log_debug("RB to pass: %s", request_body);
     pass_chat_message(sess_id_raw, request_body, &response, hssi);
     if(strcmp(response, "no_id") == 0)
     {
@@ -43,8 +142,11 @@ static void on_chat_message(http_s *h) {
   if(is_get == 0){
     http_send_error(h, (size_t)400);
   }
+  fiobj_free(query_cp);
   fiobj_free(json);
 }
+
+// Server-based functions
 
 static void on_http_request(http_s *h) {
   for(size_t i = 0; i < fiobj_hash_count(paths); i++){
@@ -52,6 +154,7 @@ static void on_http_request(http_s *h) {
     char* path = fiobj_obj2cstr(fiobj_hash_get(paths, key)).data;
     if(compare_string(h->path, path) == 0){
       if(strcmp(path, "/chat/message") == 0){
+        on_memory_header_present(h);
         on_chat_message(h);
         break;
       }
@@ -60,9 +163,7 @@ static void on_http_request(http_s *h) {
 }
 
 static void on_sse_open(http_sse_s* sse) {
-  //http_sse_s* hssi = http_sse_dup(sse);
-  http_sse_set_timout(sse, fio_cli_get_i("-ping"));
-  
+  http_sse_set_timout(sse, fio_cli_get_i("-ping"));  
   FIOBJ val = fiobj_ptr_wrap(sse);
   FIOBJ skey = fiobj_str_new(sse->udata, strlen(sse->udata));
   log_debug("Handle wrapper pointer (On_SSE_Open): %p", val);
@@ -70,11 +171,6 @@ static void on_sse_open(http_sse_s* sse) {
   if(res == -1){
     log_fatal("Moving sse object to shared hash failed.");
   }
-}
-
-
-static void on_sse_cleanup(http_sse_s* sse){
-  //http_sse_free(hssi);
 }
 
 static void on_sse_close(http_sse_s* sse){
@@ -97,7 +193,6 @@ static void on_sse_upgrade(http_s* request, char* requested_protocol, size_t len
   http_upgrade2sse(request, 
                   .on_open = on_sse_open, 
                   .on_close = on_sse_close, 
-                  .on_shutdown = on_sse_cleanup,
                   .udata = strdup(sess_id_raw)
   );
 }
@@ -130,7 +225,6 @@ void initialize_http_service(void) {
     if(endpoints_type == 1)
     {
       for(size_t i = 0; i < fiobj_ary_count(endpoints); i++){
-        const char* path = fiobj_obj2cstr(fiobj_ary_index(endpoints, i)).data;
         FIOBJ key = fiobj_num_new((intptr_t)i);
         int res = fiobj_hash_set(paths, key, fiobj_dup(fiobj_ary_index(endpoints, i)));
         if(res == -1){

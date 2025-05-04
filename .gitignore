@@ -20,8 +20,7 @@ obj.obj
 a.exe
 data.dump.json
 
-./log/*.log
-./tools/
+log/*.log
+tools/
 *.sln
-./misc/dotnet-client
 ./www

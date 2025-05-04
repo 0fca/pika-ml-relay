@@ -1,14 +1,20 @@
 #include "main.h"
 
+#define DEFAULT_AWAIT_MS 10
+#define DEFAULT_TIMEOUT DEFAULT_AWAIT_MS * 10
+
 void await_for_lock(fio_lock_i* lock)
 {
+  int timeout_counter = 0;
   while(1)
     {
-        fio_throttle_thread(mstons(10));
-        if(fio_is_locked(lock) == 0)
-        {
-            return;
-        }
+      fio_throttle_thread(mstons(DEFAULT_AWAIT_MS));
+      if(fio_is_locked(lock) == 0 || timeout_counter >= DEFAULT_TIMEOUT)
+      {
+        log_debug("Freeing lock, either because unlocked or timeout hit in");
+        return;
+      }
+      timeout_counter += 1;
     }
 }
 

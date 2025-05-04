@@ -5,7 +5,7 @@ fio_lock_i inner_lock;
 
 void initialize_redis()
 {
-    fio_pubsub_engine_s *r = redis_engine_create(.address.data = "192.168.1.15");
+    fio_pubsub_engine_s *r = redis_engine_create(.address.data = "192.168.1.253");
     if (!r)
     {
         perror("Couldn't initialize Redis");
@@ -14,6 +14,10 @@ void initialize_redis()
     fio_state_callback_add(FIO_CALL_AT_EXIT,
                            (void (*)(void *))redis_engine_destroy, r);
     FIO_PUBSUB_DEFAULT = r;
+    FIOBJ db_select = fiobj_ary_new();
+    fiobj_ary_push(db_select, fiobj_str_new("SELECT", 7));
+    fiobj_ary_push(db_select, fiobj_str_new("5", 1));
+    redis_engine_send(FIO_PUBSUB_DEFAULT, db_select, NULL, NULL);
 }
 
 

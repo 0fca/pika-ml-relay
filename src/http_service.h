@@ -1,7 +1,6 @@
 #include "fiobj.h"
 #include "fio_cli.h"
 #include <string.h>
-#include <stdio.h>
 #include "relay_client.h"
 
 #ifndef H_HTTP_SERVICE_H

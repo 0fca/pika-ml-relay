@@ -1,0 +1,46 @@
+2025-02-23 21:30:03 DEBUG src/http_service.c:90: UPREQ: sse
+2025-02-23 21:30:03 DEBUG src/http_service.c:68: Handle wrapper pointer (On_SSE_Open): 0xf573ce045101
+2025-02-23 21:30:22 DEBUG src/http_service.c:28: HSSI handles count: 1
+2025-02-23 21:30:23 DEBUG src/main.c:18: Timeout reached on await lock, aborting await.
+2025-02-23 21:30:23 DEBUG src/relay_client.c:382: SSHE-HNDL: 0x7ab9e7022880
+2025-02-23 21:30:23 DEBUG src/relay_client.c:390: STORE-EXSTS: 0
+2025-02-23 21:30:34 DEBUG src/relay_client.c:285: Model: deepseek-llm
+2025-02-23 21:35:00 DEBUG src/http_service.c:82: TRY-DISCONN :: l.bownik
+2025-02-23 21:35:00 DEBUG src/http_service.c:84: OK-DISCONN
+2025-02-23 21:35:00 INFO  src/http_service.c:85: Session for l.bownik disconnected
+2025-02-23 23:05:15 DEBUG src/http_service.c:85: UPREQ: sse
+2025-02-23 23:05:15 DEBUG src/http_service.c:68: Handle wrapper pointer (On_SSE_Open): 0xe3348da0df21
+2025-02-23 23:05:23 DEBUG src/http_service.c:28: HSSI handles count: 1
+2025-02-23 23:05:23 DEBUG src/redis_service.c:34: null : l.bownik_session_store
+2025-02-23 23:05:23 DEBUG src/redis_service.c:39: Session key exists: 0
+2025-02-23 23:05:23 DEBUG src/relay_client.c:381: SSHE-HNDL: 0x719a46d06f90
+2025-02-23 23:05:23 DEBUG src/relay_client.c:389: STORE-EXSTS: 0
+2025-02-23 23:05:24 DEBUG src/relay_client.c:284: Model: deepseek-llm
+2025-02-23 23:06:55 DEBUG src/http_service.c:85: UPREQ: sse
+2025-02-23 23:06:55 DEBUG src/http_service.c:68: Handle wrapper pointer (On_SSE_Open): 0xe3348d9e6d41
+2025-02-23 23:07:17 DEBUG src/http_service.c:28: HSSI handles count: 1
+2025-02-23 23:07:17 DEBUG src/redis_service.c:34: null : l.bownik_session_store
+2025-02-23 23:07:17 DEBUG src/redis_service.c:39: Session key exists: 0
+2025-02-23 23:07:17 DEBUG src/relay_client.c:381: SSHE-HNDL: 0x719a46cf36a0
+2025-02-23 23:07:17 DEBUG src/relay_client.c:389: STORE-EXSTS: 0
+2025-02-23 23:07:28 DEBUG src/relay_client.c:284: Model: deepseek-llm
+2025-02-23 23:07:57 DEBUG src/http_service.c:85: UPREQ: sse
+2025-02-23 23:07:57 DEBUG src/http_service.c:68: Handle wrapper pointer (On_SSE_Open): 0xe3348d9df501
+2025-02-23 23:08:13 DEBUG src/http_service.c:28: HSSI handles count: 1
+2025-02-23 23:08:13 DEBUG src/redis_service.c:34: l.bownik_session_store : l.bownik_session_store
+2025-02-23 23:08:13 DEBUG src/redis_service.c:39: Session key exists: 1
+2025-02-23 23:08:13 DEBUG src/relay_client.c:381: SSHE-HNDL: 0x719a46cefa80
+2025-02-23 23:08:13 DEBUG src/relay_client.c:389: STORE-EXSTS: 1
+2025-02-23 23:08:13 DEBUG src/relay_client.c:400: SESS-CACHE-ID: l.bownik_session_store
+2025-02-23 23:08:13 DEBUG src/relay_client.c:366: CACHE-OUT-LEN: 4775
+2025-02-23 23:08:14 DEBUG src/relay_client.c:284: Model: deepseek-llm
+2025-02-23 23:08:18 DEBUG src/relay_client.c:297: {"model":"deepseek-llm","created_at":"2025-02-23T23:07:35.809660809Z","message":{"role":"assistant","content":"Hello! How can I help you today?"},"done_reason":"stop","done":true,"total_duration":3755797015,"load_duration":58025389,"prompt_eval_count":26,"prompt_eval_duration":1728000000,"eval_count":10,"eval_duration":1446000000}
+2025-02-25 08:20:13 DEBUG src/http_service.c:77: TRY-DISCONN :: l.bownik
+2025-02-25 08:20:13 DEBUG src/http_service.c:79: OK-DISCONN
+2025-02-25 08:20:13 INFO  src/http_service.c:80: Session for l.bownik disconnected
+2025-02-25 08:20:13 DEBUG src/http_service.c:77: TRY-DISCONN :: l.bownik
+2025-02-25 08:20:13 DEBUG src/http_service.c:79: OK-DISCONN
+2025-02-25 08:20:13 INFO  src/http_service.c:80: Session for l.bownik disconnected
+2025-02-25 08:20:13 DEBUG src/http_service.c:77: TRY-DISCONN :: l.bownik
+2025-02-25 08:20:13 DEBUG src/http_service.c:79: OK-DISCONN
+2025-02-25 08:20:13 INFO  src/http_service.c:80: Session for l.bownik disconnected
