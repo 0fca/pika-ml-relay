@@ -30,3 +30,6 @@ char* read_string_since(char* str, const char* delim);
 char* parse_content_disposition(char* cd_str);
 long mstons(long milis);
 void await_for_lock(fio_lock_i* lock);
+char *read_until_delim(char **buffer, char start_token, char delim);
+char *concat(const char *s1, const char *s2);
+int contains_substring(const char *haystack, const char *needle);

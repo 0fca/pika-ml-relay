@@ -10,7 +10,7 @@ volatile FIOBJ hssi_s = FIOBJ_INVALID;
 fio_lock_i memory_execution_lock;
 
 static char* rhmem = NULL;
-static size_t rhsize;
+static size_t rhsize = 512;
 
 // Helper functions
 
@@ -88,8 +88,6 @@ static void on_memory_header_present(http_s *h)
       fiobj_free(memory_config);
       free(fname);
       free(memory_params);
-      //free(req_handle);
-      //free(memory_result);
     }
   }
 }
@@ -112,7 +110,6 @@ static void on_chat_message(http_s *h) {
     log_debug("%d", rhsize);
     char* request_body = malloc(rhsize);
     if(rhmem == NULL){
-      //request_body = fiobj_obj2cstr(json).data;
       fio_str_info_s rb = fiobj_obj2cstr(json);
       strncpy(request_body, rb.data, rb.len);
     } 

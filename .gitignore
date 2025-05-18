@@ -24,3 +24,5 @@ log/*.log
 tools/
 *.sln
 ./www
+
+python
