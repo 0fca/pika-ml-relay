@@ -14,6 +14,7 @@ volatile intptr_t fd = NULL;
 void *parse_chunked_response()
 {
     char *ptid = malloc(16);
+    sprintf(ptid, "%s", "chunked_handler");
     ssize_t safe_gauge = 0;
     char buffer[CHUNK_BUFFER_SIZE] = {0};
     ssize_t len = 0;
@@ -25,38 +26,28 @@ void *parse_chunked_response()
         {
             char *buffcpy = malloc(len);
             memcpy(buffcpy, buffer, len);
-            // TODO: Probably should be supporting more than just 2 chunks in single buffer read?
-            char *read = read_until_delim(&buffcpy, '{', '\n');
-            char *read2 = read_until_delim(&buffcpy, '{', '\n');
-            log_debug("HTTP-RELAY::STREAM::READ: %s %s", read, read2);
             safe_gauge = len;
             if (hssi_g != NULL)
             {
-                log_debug("HTTP-RELAY::STREAM::HSSI");
-                
-                if(read != NULL){
+                char *read = malloc(strlen(buffer) + 1);
+                while ((read = read_until_delim(&buffcpy, '{', '\n')) != NULL)
+                {
+                    log_debug("HTTP-RELAY::STREAM::READ: %s", read);
+                    if (read == NULL
+                        // TODO: It is mostly a case when Ollama is used or some other API that does return such json
+                        || 1 == contains_substring(read, "\"done_reason\":\"stop\",\"done\":true"))
+                    {
+                        log_debug("HTTP-RELAY::STREAM::HALT");
+                        return ptid;
+                    }
                     http_sse_write(hssi_g, .id = {.data = hssi_g->udata, .len = strlen(hssi_g->udata)}, .data = {.data = read, .len = strlen(read)}, .event = {.data = "usermessage-chk", .len = 15});
                 }
+            }
 
-                if(read != NULL && read2 != NULL){
-                    char* payload = malloc(strlen(read) + strlen(read2) + 1);
-                    memset(payload, 0, strlen(read) + strlen(read2) + 1);
-                    strcat(payload, read);
-                    strcat(payload, read2);
-                    http_sse_write(hssi_g, .id = {.data = hssi_g->udata, .len = strlen(hssi_g->udata)}, .data = {.data = payload, .len = strlen(payload)}, .event = {.data = "usermessage-chk", .len = 15});
-                }
-            }
-            if (read == NULL && read2 == NULL 
-                // TODO: It is mostly a case when Ollama is used or some other API that does return such json
-                || 1 == contains_substring(read, "\"done_reason\":\"stop\",\"done\":true") 
-                || 1 == contains_substring(read2, "\"done_reason\":\"stop\",\"done\":true")
-            )
-            {
-                log_debug("HTTP-RELAY::STREAM::STOP");
-                return ptid;
-            }
             memset(buffer, 0, CHUNK_BUFFER_SIZE);
-        } else if(safe_gauge == 0){
+        }
+        else if (safe_gauge == 0)
+        {
             usleep(1000);
         }
     }
