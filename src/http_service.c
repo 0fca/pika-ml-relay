@@ -37,13 +37,20 @@ static void on_memory_header_present(http_s *h)
   log_debug("MEM-REQ: %s", fiobj_obj2cstr(r).data);
   FIOBJ mem_hdr_key = fiobj_str_new("x-memory", 8);
   int is_present = fiobj_hash_haskey(headers, mem_hdr_key);
-  log_debug("USE-MEM: %d", is_present);
+  log_debug("MEM-HDR: %d", is_present);
   if(is_present == 1)
   {
     FIOBJ memory_config = fiobj_hash_get(headers, mem_hdr_key);
     log_debug("HDR-TYPE: %s", fiobj_type_name(memory_config));
     if(fiobj_type_is(memory_config, FIOBJ_T_STRING) == 1)
     {
+      FIOBJ mem_off_str = fiobj_str_new("0", 1);
+
+      if(strcmp(fiobj_obj2cstr(memory_config).data, fiobj_obj2cstr(mem_off_str).data) == 0)
+      {
+        log_debug("Memory header is set to 0, skipping");
+        return;
+      }
       fio_str_info_s b = fiobj_obj2cstr(h->body);
       char* msg = newest_message_from_request(b.data);
       char* model = malloc(MODEL_NAME_L);

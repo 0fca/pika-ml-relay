@@ -30,7 +30,7 @@ void *parse_chunked_response()
             if (hssi_g != NULL)
             {
                 char *read = malloc(strlen(buffer) + 1);
-                while ((read = read_until_delim(&buffcpy, '{', '\n')) != NULL)
+                while ((read = read_until_delim(&buffcpy, '{', '\r')) != NULL)
                 {
                     log_debug("HTTP-RELAY::STREAM::READ: %s", read);
                     if (read == NULL
@@ -41,7 +41,10 @@ void *parse_chunked_response()
                         return ptid;
                     }
                     http_sse_write(hssi_g, .id = {.data = hssi_g->udata, .len = strlen(hssi_g->udata)}, .data = {.data = read, .len = strlen(read)}, .event = {.data = "usermessage-chk", .len = 15});
+                    size_t read_len = strlen(read);
+                    memset(read, 0, read_len);
                 }
+                free(read);
             }
 
             memset(buffer, 0, CHUNK_BUFFER_SIZE);
@@ -156,10 +159,14 @@ static void on_response(http_s *h)
             log_debug("%s supports tools", model);
             apnd_toolsec2req(session_container, &req_handle);
         }
-        log_debug("R: %s", req_handle);
+        char *is_stream_request = strstr(req_handle, "\"stream\":false");
         http_send_body(h, req_handle, strlen(req_handle));
-        fd = http_hijack(h, NULL);
-        fio_thread_new(&parse_chunked_response, NULL);
+        if (is_stream_request == NULL)
+        {
+            log_debug("R: %s", req_handle);
+            fd = http_hijack(h, NULL);
+            fio_thread_new(&parse_chunked_response, NULL);
+        }
         fiobj_free(data_container);
         fiobj_free(session_container);
         return;

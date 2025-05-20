@@ -12,7 +12,7 @@
 
 // Constant strings
 
-#define OLLAMA_CHAT_ENDPOINT "http://127.0.0.1:11434/api/chat"
+#define OLLAMA_CHAT_ENDPOINT "http://192.168.1.252:11434/api/chat"
 #define TOOLSEC_TEMPLATE "{\"type\":\"function\", \"function\":{\"name\": \"%s\", \"description\": \"%s\", \"parameters\": %s}}"
 #define CHUNK_BUFFER_SIZE 1024
 
