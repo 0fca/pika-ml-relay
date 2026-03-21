@@ -104,6 +104,11 @@ void apnd_syssec2req(FIOBJ container, char** req_handle)
     char* model = fio_malloc(MODEL_NAME_L);
     extract_model(&model, *req_handle);
     log_debug("%s", model);
+    if(model == NULL || strlen(model) == 0)
+    {
+        log_error("%s", "Model is empty, cannot set sys prompts");
+        return;
+    }
     FIOBJ model_obj = fiobj_str_tmp();
     fiobj_str_printf(model_obj, "%s", model);
     if(fiobj_hash_haskey(prompts, model_obj) != 1)
@@ -125,9 +130,13 @@ void apnd_syssec2req(FIOBJ container, char** req_handle)
             }
         }
     }
+    fio_free(model);
+    fiobj_free(syspromptskey);
+    fiobj_free(model_obj);
+    fiobj_free(prompts);
 }
 
-void apnd_toolsec2req(FIOBJ container, char** req_handle)
+void apnd_toolsec2req(FIOBJ container, char** req_handle, char* toolname, char* token)
 {
     FIOBJ cmdskey = fiobj_str_new("cmds", 4);
     FIOBJ urlkey = fiobj_str_new("tool_url", 8);
@@ -152,12 +161,18 @@ void apnd_toolsec2req(FIOBJ container, char** req_handle)
                 char *url = fiobj_obj2cstr(tool_url).data;
                 char *engine = fiobj_obj2cstr(tool_engine).data;
                 char *name = fiobj_obj2cstr(fiobj_hash_get(cmd, namekey)).data;
+                if(toolname != NULL && strcmp(name, toolname) != 0)
+                {
+                    fiobj_free(cmd);
+                    continue;
+                }
                 char *description = fiobj_obj2cstr(fiobj_hash_get(cmd, desckey)).data;
                 char* params_json_str = strdup(fiobj_obj2cstr(fiobj_hash_get(cmd, params)).data);
 
                 log_debug("REQ-PREP: %s, %s", url, engine);
                 log_debug(params_json_str);
-                download_tool(url, name);
+                log_debug("Extracted auth: %s", token);
+                download_tool(url, name, token);
                 FIOBJ parsed_params_json = FIOBJ_INVALID;
                 if(strcmp(params_json_str, "") == 0 || params_json_str == NULL)
                 {

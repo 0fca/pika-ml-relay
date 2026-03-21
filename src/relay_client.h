@@ -1,5 +1,5 @@
 #define CMD_LEN 256
-#define OUTPUT_SINGLE_L 1024
+#define OUTPUT_SINGLE_L 16384
 #define OUTPUT_L 65535
 #define TOOL_SEC_L 65535
 #define MODEL_NAME_L 32
@@ -17,5 +17,6 @@
 #define CHUNK_BUFFER_SIZE 1024
 
 
-void pass_chat_message(char* sess_id, char* message, char** response, http_sse_s* hssi);
+void pass_chat_message(char* sess_id, char* message, char** response, http_sse_s* hssi, http_s *h);
 void* parse_chunked_response();
+char* extract_auth_header(http_s *h);

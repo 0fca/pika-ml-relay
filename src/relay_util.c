@@ -2,7 +2,7 @@
 
 // It is just a default value so to be sure that the server will run anything on Ollama or at least will try to
 // It is to be populated from config.json at relay init.
-const char* tool_support[1] = {"granite3.1-dense:8b"}; 
+const char* tool_support[2] = {"mistral:7b", "granite3.1:8b"}; 
 
 void extract_model(char** model, char* request)
 {
@@ -21,7 +21,7 @@ void extract_model(char** model, char* request)
 
 bool supports_tools(char* model)
 {
-    for(int i = 0; i < 1; i++)
+    for(size_t i = 0; i < sizeof(tool_support)/sizeof(char*); i++)
     {
         if(strcmp(model, tool_support[i]) == 0)
         {
@@ -60,7 +60,7 @@ void parse_arguments_hash(FIOBJ arguments, char* parsed)
 }
 
 
-void execute_download(char* full_url, char *name)
+void execute_download(char* full_url, char *name, char* token)
 {
     log_debug("DWN: %s", full_url);
     CURL *curl = curl_easy_init();
@@ -70,18 +70,32 @@ void execute_download(char* full_url, char *name)
         curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_curl_callback);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, fp);
-        CURLcode res = curl_easy_perform(curl);
+
+        struct curl_slist *headers = NULL;
+        if (token && strlen(token) > 0) {
+            size_t token_len = strlen(token) + 15; // "Authorization: Bearer " + token
+            char* auth_header = malloc(token_len);
+            sprintf(auth_header, "Authorization: %s", token);
+            log_debug("Auth Header: %s", auth_header);
+            headers = curl_slist_append(headers, auth_header);
+            curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+        }
+
+        curl_easy_perform(curl);
+        if (headers) {
+            curl_slist_free_all(headers);
+        }
         curl_easy_cleanup(curl);
         fclose(fp);
     }
 }
 
-void download_tool(char *tool_url, char *name)
+void download_tool(char *tool_url, char *name, char *token)
 {
     /*shmfid = shmget(IPC_PRIVATE, strlen(name), IPC_CREAT | IPC_EXCL | S_IRUSR | S_IWUSR);
     char *fname_addr;
     char *shmfname = shmat(shmfid, fname_addr, 0);
     sprintf(shmfname, "%s", name);
     shmdt(shmfname);*/
-    execute_download(tool_url, name);
+    execute_download(tool_url, name, token);
 }

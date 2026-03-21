@@ -33,3 +33,5 @@ void await_for_lock(fio_lock_i* lock);
 char *read_until_delim(char **buffer, char start_token, char delim);
 char *concat(const char *s1, const char *s2);
 int contains_substring(const char *haystack, const char *needle);
+void json2cstr(FIOBJ obj, char **buffer);
+void replace_char(char *str, char find, char replace);

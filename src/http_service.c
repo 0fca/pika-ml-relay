@@ -10,7 +10,7 @@ volatile FIOBJ hssi_s = FIOBJ_INVALID;
 fio_lock_i memory_execution_lock;
 
 static char* rhmem = NULL;
-static size_t rhsize = 512;
+static size_t rhsize = 32768; // 32kB, should be enough for most of the cases
 
 // Helper functions
 
@@ -23,6 +23,10 @@ static void* create_shared_memory(size_t size)
 
 static void erase_shmem(size_t size)
 {
+  if(rhmem != NULL)
+  {
+    memset(rhmem, 0, size);
+  }
   int r = munmap(NULL, size);
   if(r != 0)
   {
@@ -49,6 +53,11 @@ static void on_memory_header_present(http_s *h)
       if(strcmp(fiobj_obj2cstr(memory_config).data, fiobj_obj2cstr(mem_off_str).data) == 0)
       {
         log_debug("Memory header is set to 0, skipping");
+        rhmem = NULL;
+        fiobj_free(r);
+        fiobj_free(mem_hdr_key);
+        //fiobj_free(memory_config);
+        fiobj_free(mem_off_str);
         return;
       }
       fio_str_info_s b = fiobj_obj2cstr(h->body);
@@ -70,29 +79,39 @@ static void on_memory_header_present(http_s *h)
       fclose(fp);
       log_debug("Mem Params: %s", memory_params);
       // Memory script shall be deployed not as a tool, but with a server itself or configured through .json
-      char* memory_result = malloc(16834);
+      char* memory_result = malloc(MEMRES_L);
+      memset(memory_result, 0, MEMRES_L);
       fio_trylock(&memory_execution_lock);
       execute_tool(&memory_result, "python", "tools/memory.py", memory_params, memory_execution_lock);
       await_for_lock(&memory_execution_lock);
       log_debug("MEM_RES: %s", memory_result);
       FIOBJ memory_message = fiobj_hash_new();
+      FIOBJ memory_message_obj = fiobj_str_new(memory_result, strlen(memory_result));
+      FIOBJ role_key_s = fiobj_str_new("role", 4);
+      FIOBJ content_key_s = fiobj_str_new("content", 7);
+      FIOBJ system_key_s = fiobj_str_new("system", 6);
       // FIXME: Move keys and value objects into refference access variable, so those could be freed
-      fiobj_hash_set(memory_message, fiobj_str_new("role", 4), fiobj_str_new("system", 6));
-      fiobj_hash_set(memory_message, fiobj_str_new("content", 7), fiobj_str_new(memory_result, strlen(memory_result)));
+      fiobj_hash_set(memory_message, role_key_s, system_key_s);
+      fiobj_hash_set(memory_message, content_key_s, memory_message_obj);
       char* req_handle = malloc(b.len);
+      memset(req_handle, 0, b.len);
       sprintf(req_handle, "%s", b.data);
       push_on_top_curr_req_messages(memory_message, &req_handle);
-      rhsize = strlen(req_handle);
+      //rhsize = strlen(req_handle);
       if(rhmem == NULL){
         rhmem = (char*)create_shared_memory(rhsize);
       }
+      memset(rhmem, 0, rhsize);
       log_debug("RH: %s", req_handle);
       strncpy(rhmem, req_handle, rhsize);
       fiobj_free(query_cp);
-      fiobj_free(headers);
+      fiobj_free(memory_message_obj);
+      fiobj_free(role_key_s);
+      fiobj_free(content_key_s);
+      fiobj_free(system_key_s);
+      fiobj_free(memory_message);
       fiobj_free(r);
       fiobj_free(mem_hdr_key);
-      fiobj_free(memory_config);
       free(fname);
       free(memory_params);
     }
@@ -116,6 +135,7 @@ static void on_chat_message(http_s *h) {
     char* response;
     log_debug("%d", rhsize);
     char* request_body = malloc(rhsize);
+    memset(request_body, 0, rhsize);
     if(rhmem == NULL){
       fio_str_info_s rb = fiobj_obj2cstr(json);
       strncpy(request_body, rb.data, rb.len);
@@ -130,7 +150,7 @@ static void on_chat_message(http_s *h) {
     http_sse_s* hssi = (http_sse_s*)fiobj_ptr_unwrap(fiobj_hash_get(hssi_s, key));
     log_debug("HSSI handles count: %d", fiobj_hash_count(hssi_s));
     log_debug("RB to pass: %s", request_body);
-    pass_chat_message(sess_id_raw, request_body, &response, hssi);
+    pass_chat_message(sess_id_raw, request_body, &response, hssi, h);
     if(strcmp(response, "no_id") == 0)
     {
       http_set_header(h, fiobj_str_new("X-Precondition", 13), fiobj_str_new("Sent too early, first initiate SSE connection", 46));

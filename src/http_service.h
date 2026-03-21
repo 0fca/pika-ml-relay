@@ -6,6 +6,8 @@
 #ifndef H_HTTP_SERVICE_H
 #define H_HTTP_SERVICE_H
 
+#define MEMRES_L 1024 * 1024 * 1
+
 /* this function can be safely ignored. */
 void initialize_http_service(void);
 

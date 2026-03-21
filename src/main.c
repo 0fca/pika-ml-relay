@@ -3,6 +3,23 @@
 #define DEFAULT_AWAIT_MS 10
 #define DEFAULT_TIMEOUT DEFAULT_AWAIT_MS * 10
 
+void replace_char(char *str, char find, char replace) 
+{
+    if (!str) return;
+    for (; *str; ++str) {
+        if (*str == find) {
+            *str = replace;
+        }
+    }
+}
+
+// Not used in code for any functionality, left for debugging purposes
+void json2cstr(FIOBJ obj, char **buffer)
+{
+  char* cstr = fiobj_obj2cstr(fiobj_obj2json(obj, 0)).data;
+  strncpy(*buffer, cstr, strlen(cstr));
+}
+
 void await_for_lock(fio_lock_i *lock)
 {
   int timeout_counter = 0;

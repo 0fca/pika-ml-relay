@@ -1,7 +1,7 @@
 #include "stdbool.h"
 
 char* newest_message_from_request(const char* request);
-void apnd_toolsec2req(FIOBJ container, char** req_handle);
+void apnd_toolsec2req(FIOBJ container, char** req_handle, char* toolname, char* token);
 void apnd_syssec2req(FIOBJ container, char** req_handle);
 void push_on_top_curr_req_messages(FIOBJ message, char** req_handle);
 void update_curr_req_handle_messages(FIOBJ message, char** req_handle);
