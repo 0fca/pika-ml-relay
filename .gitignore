@@ -4,6 +4,7 @@ public_www/
 libdump
 docs/_site
 lib/bearssl/
+tools/memstore/
 
 .gitignore
 .DS_Store
@@ -20,7 +21,6 @@ a.exe
 data.dump.json
 
 log/*.log
-tools/
 *.sln
 ./www
 
