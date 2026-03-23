@@ -4,12 +4,17 @@
 #include <curl/curl.h>
 #include <curl/easy.h>
 
-// FIXME: To be moved to shared memory
-static char *req_handle;
-static http_sse_s *hssi_g = NULL;
+// Per-request context — replaces former static globals to support concurrent sessions.
+typedef struct {
+    char *req_handle;
+    http_sse_s *hssi;
+    char *user_token;
+    char *bucket_id;
+    FIOBJ session_container;
+    volatile intptr_t fd;
+} relay_context_t;
+
 fio_lock_i lock, redis_lock, dwn_lock, tool_call_lock;
-static FIOBJ session_container_g = FIOBJ_INVALID;
-volatile intptr_t fd = NULL;
 
 void is_tool_header_present(http_s *h, char **toolname)
 {
@@ -37,68 +42,87 @@ void is_tool_header_present(http_s *h, char **toolname)
                 log_error("MEM-ALLOC-FAIL");
             }
         }
-        fiobj_free(tool_header_value);
+        // Don't free tool_header_value — it's a reference into the headers hash (not dup'd)
     }
     fiobj_free(tool_header_key);
 }
 
-void *parse_chunked_response()
+static bool handle_tool_calls_from_response(const char *response_data, size_t response_len, relay_context_t *ctx);
+char* extract_header(http_s *h, char *header_name, size_t header_name_len);
+
+static relay_context_t *ctx_from_udata(http_s *h) {
+    FIOBJ container = *((FIOBJ *)h->udata);
+    return (relay_context_t *)fiobj_ptr_unwrap(
+        fiobj_hash_get(container, fiobj_str_new("ctx", 3)));
+}
+
+void *parse_chunked_response(void *arg)
 {
+    relay_context_t *ctx = (relay_context_t *)arg;
     char *ptid = malloc(16);
     sprintf(ptid, "%s", "chunked_handler");
     ssize_t safe_gauge = 0;
-    char buffer[CHUNK_BUFFER_SIZE] = {0};
+    char *buffer = calloc(CHUNK_BUFFER_SIZE, 1);
+    if (!buffer) {
+        log_error("Failed to allocate chunk buffer");
+        return ptid;
+    }
     ssize_t len = 0;
 
     while (true)
     {
-        len = fio_read(fd, buffer, CHUNK_BUFFER_SIZE);
+        len = fio_read(ctx->fd, buffer, CHUNK_BUFFER_SIZE);
         if (len > 0)
         {
-            char *buffcpy = malloc(len);
+            char *buffcpy = malloc(len + 1);
             memcpy(buffcpy, buffer, len);
+            buffcpy[len] = '\0';
+            char *buffcpy_orig = buffcpy;
             safe_gauge = len;
-            if (hssi_g != NULL)
+            if (ctx->hssi != NULL)
             {
                 char *read = NULL;
                 while ((read = read_until_delim(&buffcpy, '{', '\r')) != NULL)
                 {
                     log_debug("HTTP-RELAY::STREAM::READ: %s", read);
-                    if (read == NULL
-                        // TODO: It is mostly a case when Ollama is used or some other API that does return such json
-                        || 1 == contains_substring(read, "\"done_reason\":\"stop\",\"done\":true"))
-                    {
-                        if (read != NULL)
-                        {
-                            http_sse_write(hssi_g, .id = {.data = hssi_g->udata, .len = strlen(hssi_g->udata)}, .data = {.data = read, .len = strlen(read)}, .event = {.data = "usermessage", .len = 15});
-                        }
 
-                        log_debug("HTTP-RELAY::STREAM::HALT");
+                    if (1 == contains_substring(read, "\"tool_calls\""))
+                    {
+                        log_debug("HTTP-RELAY::STREAM::TOOL_CALLS detected");
+                        handle_tool_calls_from_response(read, strlen(read), ctx);
+                        log_debug("HTTP-RELAY::STREAM::HALT (tool call handled)");
+                        free(read);
+                        free(buffcpy_orig);
+                        free(buffer);
                         return ptid;
                     }
-                    http_sse_write(hssi_g, .id = {.data = hssi_g->udata, .len = strlen(hssi_g->udata)}, .data = {.data = read, .len = strlen(read)}, .event = {.data = "usermessage-chk", .len = 15});
-                    size_t read_len = strlen(read);
-                    memset(read, 0, read_len);
+                    http_sse_write(ctx->hssi, .id = {.data = ctx->hssi->udata, .len = strlen(ctx->hssi->udata)}, .data = {.data = read, .len = strlen(read)}, .event = {.data = "usermessage-chk", .len = 15});
+                    free(read);
                 }
-                free(read);
+                log_debug("HTTP-RELAY::STREAM::HALT");
             }
-
+            free(buffcpy_orig);
             memset(buffer, 0, CHUNK_BUFFER_SIZE);
+        }
+        else if (len < 0)
+        {
+            log_debug("HTTP-RELAY::STREAM::CONNECTION_CLOSED");
+            break;
         }
         else if (safe_gauge == 0)
         {
             usleep(1000);
         }
     }
+    free(buffer);
     return ptid;
 }
 
 static void on_tool_call(http_s *h)
 {
+    relay_context_t *ctx = ctx_from_udata(h);
     if (h->status_str == FIOBJ_INVALID)
     {
-        char *tool_sec = malloc(TOOL_SEC_L);
-        memset(tool_sec, 0, TOOL_SEC_L);
         FIOBJ container = *((FIOBJ *)h->udata);
         FIOBJ content = fiobj_str_new("content", 7);
         FIOBJ name = fiobj_str_new("tool_name", 9);
@@ -107,9 +131,9 @@ static void on_tool_call(http_s *h)
         fio_str_info_s content_info = fiobj_obj2cstr(fiobj_hash_get(container, content));
         fio_str_info_s name_info = fiobj_obj2cstr(fiobj_hash_get(container, name));
         FIOBJ opt_temp = fiobj_num_new((intptr_t)0);
-        log_debug("REQ-TOOLS-CALL: %s", req_handle);
-        bool opts_set = set_llm_req_opt("temperature", opt_temp, req_handle);
-        log_debug("REQ-TOOLS-CALL-OPT-SET: %s", req_handle);
+        log_debug("REQ-TOOLS-CALL: %s", ctx->req_handle);
+        bool opts_set = set_llm_req_opt("temperature", opt_temp, &ctx->req_handle);
+        log_debug("REQ-TOOLS-CALL-OPT-SET: %s", ctx->req_handle);
         if (opts_set == true)
         {
             log_debug("Opts set");
@@ -124,19 +148,27 @@ static void on_tool_call(http_s *h)
         if (consumed > 0)
         {
             log_debug("Passing over the tool response as datamessage");
-            http_sse_write(hssi_g, .id = {.data = hssi_g->udata, .len = strlen(hssi_g->udata)}, .data = content_info, .event = {.data = DATA_MSG, .len = strlen(DATA_MSG)});
+            http_sse_write(ctx->hssi, .id = {.data = ctx->hssi->udata, .len = strlen(ctx->hssi->udata)}, .data = content_info, .event = {.data = DATA_MSG, .len = strlen(DATA_MSG)});
+            fiobj_free(content);
+            fiobj_free(name);
+            fiobj_free(fcall_key);
             return;
         }
-        snprintf(tool_sec, TOOL_SEC_L, "{\"role\":\"tool\", \"name\":\"%s\", \"content\":\"%s\"}", name_info.data, content_info.data);
-        FIOBJ toolssec = FIOBJ_INVALID;
-        log_debug("%s", tool_sec);
-        fiobj_json2obj(&toolssec, tool_sec, strlen(tool_sec));
-        update_curr_req_handle_messages(fcall, &req_handle);
-        update_curr_req_handle_messages(toolssec, &req_handle);
-        log_debug("URH: %s", req_handle);
+        // Build tool response JSON safely using FIOBJ to handle escaping
+        FIOBJ toolssec = fiobj_hash_new();
+        fiobj_hash_set(toolssec, fiobj_str_new("role", 4), fiobj_str_new("tool", 4));
+        fiobj_hash_set(toolssec, fiobj_str_new("name", 4), fiobj_str_new(name_info.data, name_info.len));
+        fiobj_hash_set(toolssec, fiobj_str_new("content", 7), fiobj_str_new(content_info.data, content_info.len));
+        log_debug("TOOL-SEC: %s", fiobj_obj2cstr(fiobj_obj2json(toolssec, 0)).data);
+        update_curr_req_handle_messages(fcall, &ctx->req_handle);
+        update_curr_req_handle_messages(toolssec, &ctx->req_handle);
+        log_debug("URH: %s", ctx->req_handle);
         h->method = fiobj_str_new("POST", 4);
-        log_debug("FR: %s", req_handle);
-        http_send_body(h, req_handle, strlen(req_handle));
+        log_debug("FR: %s", ctx->req_handle);
+        http_send_body(h, ctx->req_handle, strlen(ctx->req_handle));
+        fiobj_free(content);
+        fiobj_free(name);
+        fiobj_free(fcall_key);
         return;
     }
     FIOBJ ollama_res = h->body;
@@ -149,7 +181,7 @@ static void on_tool_call(http_s *h)
     if (fiobj_type_is(resp_parsed, FIOBJ_T_HASH) == 1 && fiobj_hash_haskey(resp_parsed, errkey) == 1)
     {
         FIOBJ errpayload = fiobj_hash_get(resp_parsed, errkey);
-        http_sse_write(hssi_g, .id = {.data = hssi_g->udata, .len = strlen(hssi_g->udata)}, .data = fiobj_obj2cstr(errpayload), .event = {.data = CTL_MSG, .len = strlen(CTL_MSG)});
+        http_sse_write(ctx->hssi, .id = {.data = ctx->hssi->udata, .len = strlen(ctx->hssi->udata)}, .data = fiobj_obj2cstr(errpayload), .event = {.data = CTL_MSG, .len = strlen(CTL_MSG)});
         return;
     }
     FIOBJ message = fiobj_hash_get(resp_parsed, fiobj_str_new("message", 7));
@@ -158,7 +190,7 @@ static void on_tool_call(http_s *h)
     if (content_s.len == 0)
     {
         FIOBJ ctlmessage_empty_resp = fiobj_str_new("EMPTY RESP", 10);
-        http_sse_write(hssi_g, .id = {.data = hssi_g->udata, .len = strlen(hssi_g->udata)}, .data = fiobj_obj2cstr(ctlmessage_empty_resp), .event = {.data = CTL_MSG, .len = strlen(CTL_MSG)});
+        http_sse_write(ctx->hssi, .id = {.data = ctx->hssi->udata, .len = strlen(ctx->hssi->udata)}, .data = fiobj_obj2cstr(ctlmessage_empty_resp), .event = {.data = CTL_MSG, .len = strlen(CTL_MSG)});
         fiobj_free(ctlmessage_empty_resp);
         fiobj_free(resp_parsed);
         return;
@@ -170,127 +202,199 @@ static void on_tool_call(http_s *h)
         // 0 bytes consumed, that means that whatever LLM returned is not a JSON, just pass it over
         if (consumed == 0)
         {
-            http_sse_write(hssi_g, .id = {.data = hssi_g->udata, .len = strlen(hssi_g->udata)}, .data = ollama_res_s, .event = {.data = "usermessage", .len = 11});
+            http_sse_write(ctx->hssi, .id = {.data = ctx->hssi->udata, .len = strlen(ctx->hssi->udata)}, .data = ollama_res_s, .event = {.data = "usermessage", .len = 11});
         }
         // Handle JSON response?
     }
 }
 
+/**
+ * Checks the LLM response for tool_calls and executes them if found.
+ * Forces stream:false on req_handle for the follow-up request to Ollama.
+ *
+ * @return true if tool_calls were present and handled, false otherwise.
+ */
+static bool handle_tool_calls_from_response(const char *response_data, size_t response_len, relay_context_t *ctx)
+{
+    FIOBJ ollama_response_obj = FIOBJ_INVALID;
+    fiobj_json2obj(&ollama_response_obj, response_data, response_len);
+
+    if (fiobj_type_is(ollama_response_obj, FIOBJ_T_HASH) != 1)
+    {
+        fiobj_free(ollama_response_obj);
+        return false;
+    }
+
+    FIOBJ message_key = fiobj_str_new("message", 7);
+    FIOBJ tool_calls_key = fiobj_str_new("tool_calls", 10);
+
+    FIOBJ message = fiobj_hash_get(ollama_response_obj, message_key);
+    if (fiobj_type_is(message, FIOBJ_T_HASH) != 1 || fiobj_hash_haskey(message, tool_calls_key) != 1)
+    {
+        fiobj_free(message_key);
+        fiobj_free(tool_calls_key);
+        return false;
+    }
+
+    // Force stream:false for the tool result follow-up to Ollama
+    FIOBJ req_obj = FIOBJ_INVALID;
+    fiobj_json2obj(&req_obj, ctx->req_handle, strlen(ctx->req_handle));
+    FIOBJ stream_key = fiobj_str_new("stream", 6);
+    fiobj_hash_set(req_obj, stream_key, fiobj_false());
+    FIOBJ req_json = fiobj_obj2json(req_obj, 0);
+    ctx->req_handle = fiobj_obj2cstr(req_json).data;
+
+    FIOBJ fcalls = fiobj_hash_get(message, tool_calls_key);
+    if (fcalls == FIOBJ_INVALID || fiobj_type_is(fcalls, FIOBJ_T_ARRAY) != 1)
+    {
+        log_error("TOOL_CALLS: invalid or missing tool_calls array");
+        fiobj_free(message_key);
+        fiobj_free(tool_calls_key);
+        return false;
+    }
+    fio_trylock(&tool_call_lock);
+    for (size_t i = 0; i < fiobj_ary_count(fcalls); i++)
+    {
+        FIOBJ fcall = fiobj_ary_index(fcalls, i);
+        FIOBJ fkey = fiobj_str_new("function", 8);
+        FIOBJ argkey = fiobj_str_new("arguments", 9);
+        FIOBJ func = fiobj_hash_get(fcall, fkey);
+        if (func == FIOBJ_INVALID || fiobj_type_is(func, FIOBJ_T_HASH) != 1)
+        {
+            log_error("TOOL_CALLS: invalid function object at index %zu", i);
+            fiobj_free(fkey);
+            fiobj_free(argkey);
+            continue;
+        }
+        FIOBJ fnamekey = fiobj_str_new("name", 4);
+        FIOBJ fname = fiobj_hash_get(func, fnamekey);
+        FIOBJ args = fiobj_hash_get(func, argkey);
+
+        FIOBJ cmds = fiobj_hash_get(ctx->session_container, fiobj_str_new("cmds", 4));
+
+        if (cmds == FIOBJ_INVALID)
+        {
+            log_error("No cmds key in session container");
+            http_sse_write(ctx->hssi, .id = {.data = ctx->hssi->udata, .len = strlen(ctx->hssi->udata)}, .data = fiobj_obj2cstr(fiobj_str_new("NO-CMDS", 7)), .event = {.data = USR_MSG, .len = strlen(USR_MSG)});
+            fiobj_free(fkey);
+            fiobj_free(fnamekey);
+            fiobj_free(message_key);
+            fiobj_free(tool_calls_key);
+            return true;
+        }
+        for (size_t j = 0; j < fiobj_ary_count(cmds); j++)
+        {
+            FIOBJ cmd = fiobj_ary_index(cmds, (int64_t)j);
+            FIOBJ tool_engine = fiobj_hash_get(cmd, fiobj_str_new("tool_engine", 11));
+            char *tool_engine_str = fiobj_obj2cstr(tool_engine).data;
+            char *curr_tool_name = fiobj_obj2cstr(fiobj_hash_get(cmd, fnamekey)).data;
+            if (strcmp(curr_tool_name, fiobj_obj2cstr(fname).data) == 0)
+            {
+                char *params = malloc(16384);
+                memset(params, 0, 16384);
+                parse_arguments_hash(args, params);
+                // Check requires_authorization flag on the tool
+                FIOBJ req_auth_key = fiobj_str_new("requires_authorization", 22);
+                FIOBJ req_auth_val = fiobj_hash_get(cmd, req_auth_key);
+                if (req_auth_val != FIOBJ_INVALID && fiobj_true() == req_auth_val && ctx->user_token != NULL)
+                {
+                    log_debug("TOOL-REQ-AUTH: appending options for %s", curr_tool_name);
+                    char options_param[8192];
+                    if (ctx->bucket_id != NULL) {
+                        snprintf(options_param, sizeof(options_param), "'{\"user_token\":\"%s\",\"bucket_id\":\"%s\"}'" , ctx->user_token, ctx->bucket_id);
+                    } else {
+                        snprintf(options_param, sizeof(options_param), "'{\"user_token\":\"%s\"}'" , ctx->user_token);
+                    }
+                    strcat(params, options_param);
+                    strcat(params, " ");
+                }
+                fiobj_free(req_auth_key);
+                log_debug("%s : %s", curr_tool_name, fiobj_obj2cstr(fname).data);
+                char *output = malloc(16384);
+                memset(output, 0, 16384);
+                execute_tool(&output, tool_engine_str, curr_tool_name, params, &tool_call_lock);
+                await_for_lock(&tool_call_lock);
+                fio_str_info_s await_tool_call = fiobj_obj2cstr(fiobj_str_new("await tool call", 15));
+                http_sse_write(ctx->hssi, .id = {.data = ctx->hssi->udata, .len = strlen(ctx->hssi->udata)}, .data = await_tool_call, .event = {.data = "ctlmessage", .len = 10});
+                FIOBJ container = fiobj_hash_new();
+                fiobj_hash_set(container, fiobj_str_new("hssi", 4), fiobj_ptr_wrap(ctx->hssi));
+                fiobj_hash_set(container, fiobj_str_new("tool_name", 9), fiobj_str_new(curr_tool_name, strlen(curr_tool_name)));
+                fiobj_hash_set(container, fiobj_str_new("content", 7), fiobj_str_new(output, strlen(output)));
+                fiobj_hash_set(container, fiobj_str_new("fcall", 4), message);
+                // Propagate per-request context to the tool-call follow-up
+                fiobj_hash_set(container, fiobj_str_new("ctx", 3), fiobj_ptr_wrap(ctx));
+                FIOBJ *contain_ptr = fio_malloc(sizeof(*contain_ptr));
+                *contain_ptr = container;
+                http_connect(OLLAMA_CHAT_ENDPOINT, NULL, .on_response = on_tool_call, .udata = contain_ptr);
+                log_debug("%s", "RELAY-OK");
+                free(output);
+                free(params);
+                break;
+            }
+        }
+        fiobj_free(fkey);
+        fiobj_free(fnamekey);
+    }
+    fiobj_free(message_key);
+    fiobj_free(tool_calls_key);
+    return true;
+}
+
 static void on_response(http_s *h)
 {
+    relay_context_t *ctx = ctx_from_udata(h);
     if (h->status_str == FIOBJ_INVALID)
     {
         h->method = fiobj_str_new("POST", 4);
         FIOBJ data_container = *((FIOBJ *)h->udata);
         FIOBJ session_container = fiobj_hash_get(data_container, fiobj_str_new("session_container", 17));
         char* toolname = fiobj_ptr_unwrap(fiobj_hash_get(data_container, fiobj_str_new("tool_name", 9)));
-        session_container_g = fiobj_dup(session_container);
+        ctx->session_container = fiobj_dup(session_container);
         char* token = fiobj_ptr_unwrap(fiobj_hash_get(data_container, fiobj_str_new("token", 5)));
         log_debug("TOKEN: %s", token);
-        log_debug("SESSION-CONT-KEY_COUNT: %d", fiobj_hash_count(session_container_g));
-        hssi_g = (http_sse_s *)fiobj_ptr_unwrap(fiobj_hash_get(data_container, fiobj_str_new("hssi", 4)));
-        apnd_syssec2req(session_container_g, &req_handle);
+        if (token != NULL) {
+            ctx->user_token = strdup(token);
+        }
+        char* bucket_id = fiobj_ptr_unwrap(fiobj_hash_get(data_container, fiobj_str_new("bucket_id", 9)));
+        if (bucket_id != NULL) {
+            ctx->bucket_id = strdup(bucket_id);
+        }
+        log_debug("SESSION-CONT-KEY_COUNT: %d", fiobj_hash_count(ctx->session_container));
+        ctx->hssi = (http_sse_s *)fiobj_ptr_unwrap(fiobj_hash_get(data_container, fiobj_str_new("hssi", 4)));
+        apnd_syssec2req(ctx->session_container, &ctx->req_handle);
         char *model = malloc(MODEL_NAME_L);
         memset(model, 0, MODEL_NAME_L);
-        extract_model(&model, req_handle);
+        extract_model(&model, ctx->req_handle);
         log_debug("Model: %s", model);
-        if (supports_tools(model) == true)
+        if (toolname != NULL || supports_tools(model) == true)
         {
-            log_debug("%s supports tools", model);
+            log_debug("%s supports tools (or tool explicitly requested: %s)", model, toolname);
             log_debug("TOOL-RQST: %s", toolname);
 
-            apnd_toolsec2req(session_container_g, &req_handle, toolname, token);
+            apnd_toolsec2req(ctx->session_container, &ctx->req_handle, toolname, token);
         }
-        char *is_stream_request = strstr(req_handle, "\"stream\":false");
-        http_send_body(h, req_handle, strlen(req_handle));
+        char *is_stream_request = strstr(ctx->req_handle, "\"stream\":false");
+        http_send_body(h, ctx->req_handle, strlen(ctx->req_handle));
         if (is_stream_request == NULL)
         {
-            log_debug("R: %s", req_handle);
-            fd = http_hijack(h, NULL);
-            fio_thread_new(&parse_chunked_response, NULL);
+            log_debug("R: %s", ctx->req_handle);
+            ctx->fd = http_hijack(h, NULL);
+            fio_thread_new(&parse_chunked_response, ctx);
         }
         free(token);
         return;
     }
 
-    log_debug("FD: %d", fd);
+    log_debug("FD: %d", ctx->fd);
 
     fio_str_info_s ollama_res = fiobj_obj2cstr(h->body);
     log_debug(ollama_res.data);
-    if (hssi_g != NULL)
+    if (ctx->hssi != NULL)
     {
         log_debug("%s", "ON-RESP :: HSSI ok, response received");
-        FIOBJ ollama_response_obj = FIOBJ_INVALID;
-        log_debug(ollama_res.data);
-        fiobj_json2obj(&ollama_response_obj, ollama_res.data, strlen(ollama_res.data));
-
-        if (fiobj_type_is(ollama_response_obj, FIOBJ_T_HASH) == 1)
+        if (!handle_tool_calls_from_response(ollama_res.data, strlen(ollama_res.data), ctx))
         {
-            FIOBJ message_key = fiobj_str_new("message", 7);
-            FIOBJ tool_calls_key = fiobj_str_new("tool_calls", 10);
-
-            FIOBJ message = fiobj_hash_get(ollama_response_obj, message_key);
-            if (fiobj_type_is(message, FIOBJ_T_HASH) != 1 || fiobj_hash_haskey(message, tool_calls_key) != 1)
-            {
-                // It appears that the response from LLM didn't contain tool_calls, so just return whole response as is.
-                http_sse_write(hssi_g, .id = {.data = hssi_g->udata, .len = strlen(hssi_g->udata)}, .data = ollama_res, .event = {.data = USR_MSG, .len = strlen(USR_MSG)});
-                return;
-            }
-            FIOBJ fcalls = fiobj_hash_get(message, tool_calls_key);
-            fio_trylock(&tool_call_lock);
-            for (size_t i = 0; i < fiobj_ary_count(fcalls); i++)
-            {
-                FIOBJ fcall = fiobj_ary_index(fcalls, i);
-                FIOBJ fkey = fiobj_str_new("function", 8);
-                FIOBJ argkey = fiobj_str_new("arguments", 9);
-                FIOBJ func = fiobj_hash_get(fcall, fkey);
-                FIOBJ fnamekey = fiobj_str_new("name", 4);
-                FIOBJ fname = fiobj_hash_get(func, fnamekey);
-                FIOBJ args = fiobj_hash_get(func, argkey);
-
-                FIOBJ cmds = fiobj_hash_get(session_container_g, fiobj_str_new("cmds", 4));
-
-                if (cmds == FIOBJ_INVALID)
-                {
-                    log_error("No cmds key in session container");
-                    http_sse_write(hssi_g, .id = {.data = hssi_g->udata, .len = strlen(hssi_g->udata)}, .data = fiobj_obj2cstr(fiobj_str_new("NO-CMDS", 7)), .event = {.data = USR_MSG, .len = strlen(USR_MSG)});
-                    return;
-                }
-                for (size_t j = 0; j < fiobj_ary_count(cmds); j++)
-                {
-                    FIOBJ cmd = fiobj_ary_index(cmds, (int64_t)j);
-                    FIOBJ tool_engine = fiobj_hash_get(cmd, fiobj_str_new("tool_engine", 11));
-                    char *tool_engine_str = fiobj_obj2cstr(tool_engine).data;
-                    char *curr_tool_name = fiobj_obj2cstr(fiobj_hash_get(cmd, fnamekey)).data;
-                    if (strcmp(curr_tool_name, fiobj_obj2cstr(fname).data) == 0)
-                    {
-                        // log_debug("Tool name: %s", curr_tool_name);
-                        char *params = malloc(16384);
-                        memset(params, 0, 16384);
-                        parse_arguments_hash(args, params);
-                        log_debug("%s : %s", curr_tool_name, fiobj_obj2cstr(fname).data);
-                        char *output = malloc(16384);
-                        memset(output, 0, 16384);
-                        execute_tool(&output, tool_engine_str, curr_tool_name, params, tool_call_lock);
-                        await_for_lock(&tool_call_lock);
-                        fio_str_info_s await_tool_call = fiobj_obj2cstr(fiobj_str_new("await tool call", 15));
-                        http_sse_write(hssi_g, .id = {.data = hssi_g->udata, .len = strlen(hssi_g->udata)}, .data = await_tool_call, .event = {.data = "ctlmessage", .len = 10});
-                        FIOBJ container = fiobj_hash_new();
-                        fiobj_hash_set(container, fiobj_str_new("hssi", 4), fiobj_ptr_wrap(hssi_g));
-                        fiobj_hash_set(container, fiobj_str_new("tool_name", 9), fiobj_str_new(curr_tool_name, strlen(curr_tool_name)));
-                        fiobj_hash_set(container, fiobj_str_new("content", 7), fiobj_str_new(output, strlen(output)));
-                        fiobj_hash_set(container, fiobj_str_new("fcall", 4), message);
-                        FIOBJ *contain_ptr = fio_malloc(sizeof(*contain_ptr));
-                        *contain_ptr = container;
-                        http_connect(OLLAMA_CHAT_ENDPOINT, NULL, .on_response = on_tool_call, .udata = contain_ptr);
-                        log_debug("%s", "RELAY-OK");
-                        free(output);
-                        break;
-                    }
-                }
-                fiobj_free(fkey);
-                fiobj_free(fnamekey);
-            }
+            http_sse_write(ctx->hssi, .id = {.data = ctx->hssi->udata, .len = strlen(ctx->hssi->udata)}, .data = ollama_res, .event = {.data = USR_MSG, .len = strlen(USR_MSG)});
         }
     }
 }
@@ -316,14 +420,16 @@ static void on_cached_session_get(fio_pubsub_engine_s *e, FIOBJ reply, void *con
 void pass_chat_message(char *sess_id, char *request, char **response, http_sse_s *hssi, http_s *h)
 {
     log_debug("%d", strlen(request));
-    log_debug("CRH: ", req_handle);
-    if (req_handle == NULL)
-    {
-        req_handle = malloc(strlen(request) + 1);
+    relay_context_t *ctx = calloc(1, sizeof(relay_context_t));
+    if (!ctx) {
+        log_error("Failed to allocate relay context");
+        *response = "no_id";
+        return;
     }
-    memset(req_handle, 0, strlen(request) + 1);
-    strncpy(req_handle, request, strlen(request) + 1);
-    log_debug("REQ-HANDLE: %s", req_handle);
+    ctx->req_handle = malloc(strlen(request) + 1);
+    memset(ctx->req_handle, 0, strlen(request) + 1);
+    strncpy(ctx->req_handle, request, strlen(request) + 1);
+    log_debug("REQ-HANDLE: %s", ctx->req_handle);
     size_t sesslen = strlen(sess_id);
     char *session_cache_id = malloc(sesslen + 16); // 16 for "_session_store" and null terminator
     sprintf(session_cache_id, "%s_%s", sess_id, "session_store");
@@ -368,14 +474,19 @@ void pass_chat_message(char *sess_id, char *request, char **response, http_sse_s
     FIOBJ on_resp_data = fiobj_hash_new();
     char* token = extract_auth_header(h);
     log_debug("TOKEN: %s", token);
+    char* bucket_id = extract_header(h, (char *)"x-bucket-id", (size_t)11);
+    log_debug("BUCKET-ID: %s", bucket_id);
     fiobj_hash_set(on_resp_data, fiobj_str_new("session_container", 17), session_container);
     fiobj_hash_set(on_resp_data, fiobj_str_new("hssi", 4), fiobj_ptr_wrap(hssi));
     fiobj_hash_set(on_resp_data, fiobj_str_new("token", 5), fiobj_ptr_wrap(token));
+    fiobj_hash_set(on_resp_data, fiobj_str_new("bucket_id", 9), fiobj_ptr_wrap(bucket_id));
     char *toolname = NULL;
     is_tool_header_present(h, &toolname);
     log_debug("TOOL-NAME: %s", toolname);
     int tool_name_res = fiobj_hash_set(on_resp_data, fiobj_str_new("tool_name", 9), fiobj_ptr_wrap(toolname));
     log_debug("TOOL-NAME-RES: %d", tool_name_res);
+    // Attach per-request context so callbacks can access it via udata
+    fiobj_hash_set(on_resp_data, fiobj_str_new("ctx", 3), fiobj_ptr_wrap(ctx));
     FIOBJ *onrptr = fio_malloc(sizeof(*onrptr));
     *onrptr = on_resp_data;
     intptr_t status = http_connect(OLLAMA_CHAT_ENDPOINT, NULL, .on_response = on_response, .udata = onrptr);
@@ -392,7 +503,6 @@ void pass_chat_message(char *sess_id, char *request, char **response, http_sse_s
             return;
         }
         *response = fiobj_obj2cstr(fiobj_obj2json(hash, 1)).data;
-        fiobj_free(value);
     }
     else
     {
@@ -406,7 +516,6 @@ void pass_chat_message(char *sess_id, char *request, char **response, http_sse_s
             return;
         }
         *response = fiobj_obj2cstr(fiobj_obj2json(hash, 1)).data;
-        fiobj_free(value);
     }
     free(session_cache_id);
     fiobj_free(key);
@@ -456,5 +565,35 @@ char* extract_auth_header(http_s *h) {
     log_debug("Authorization header value: %.*s", (int)auth_str.len, auth_str.data);
     memcpy(result, auth_str.data, auth_str.len);
     fiobj_free(auth_key);
+    return result;
+}
+
+char* extract_header(http_s *h, char *header_name, size_t header_name_len) {
+    if (!h || h->headers == FIOBJ_INVALID) {
+        return NULL;
+    }
+    FIOBJ hdr_key = fiobj_str_new(header_name, header_name_len);
+    if (!fiobj_hash_haskey(h->headers, hdr_key)) {
+        fiobj_free(hdr_key);
+        return NULL;
+    }
+    FIOBJ hdr_value = fiobj_hash_get(h->headers, hdr_key);
+    if (hdr_value == FIOBJ_INVALID || fiobj_type_is(hdr_value, FIOBJ_T_STRING) != 1) {
+        fiobj_free(hdr_key);
+        return NULL;
+    }
+    fio_str_info_s hdr_str = fiobj_obj2cstr(hdr_value);
+    if (hdr_str.len == 0) {
+        fiobj_free(hdr_key);
+        return NULL;
+    }
+    char *result = malloc(hdr_str.len + 1);
+    if (result == NULL) {
+        fiobj_free(hdr_key);
+        return NULL;
+    }
+    memcpy(result, hdr_str.data, hdr_str.len);
+    result[hdr_str.len] = '\0';
+    fiobj_free(hdr_key);
     return result;
 }

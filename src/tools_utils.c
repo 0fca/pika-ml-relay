@@ -1,11 +1,11 @@
 #include "main.h"
 
 // FIXME: Make this configurable to run more than just python scripts.
-void execute_tool(char **output, char *tool_engine, char *tool_name, char *parameters, fio_lock_i tool_call_lock)
+void execute_tool(char **output, char *tool_engine, char *tool_name, char *parameters, fio_lock_i *tool_call_lock)
 {
     char *cmd_str = malloc(CMD_LEN);
     log_debug("%s %s %s", tool_engine, tool_name, parameters);
-    snprintf(cmd_str, CMD_LEN, "bash -c \"%s %s %s\"", tool_engine, tool_name, parameters);
+    snprintf(cmd_str, CMD_LEN, "%s %s %s", tool_engine, tool_name, parameters);
     FILE *fp;
     fp = popen(cmd_str, "r");
     if (fp == NULL)
@@ -27,6 +27,6 @@ void execute_tool(char **output, char *tool_engine, char *tool_name, char *param
     strncpy(*output, result, strlen(result));
     free(result);
     log_debug("TOOL-OUTPUT: %s", *output);
-    fio_unlock(&tool_call_lock);
+    fio_unlock(tool_call_lock);
     log_info("Await lock freed for: %s", tool_name);
 }

@@ -118,6 +118,16 @@ static void on_memory_header_present(http_s *h)
   }
 }
 
+static void on_models_request(http_s *h) {
+  FIOBJ models = get_models_json();
+  FIOBJ json = fiobj_obj2json(models, 0);
+  fio_str_info_s json_str = fiobj_obj2cstr(json);
+  http_set_header(h, HTTP_HEADER_CONTENT_TYPE, http_mimetype_find("json", 4));
+  http_send_body(h, json_str.data, json_str.len);
+  fiobj_free(models);
+  fiobj_free(json);
+}
+
 static void on_chat_message(http_s *h) {
   FIOBJ json = h->body;
   size_t is_post = compare_string(h->method, "POST");
@@ -173,6 +183,11 @@ static void on_chat_message(http_s *h) {
 // Server-based functions
 
 static void on_http_request(http_s *h) {
+  // Handle /models directly (not in config endpoints)
+  if(compare_string(h->path, "/models") == 0){
+    on_models_request(h);
+    return;
+  }
   for(size_t i = 0; i < fiobj_hash_count(paths); i++){
     FIOBJ key = fiobj_num_new((intptr_t)i);
     char* path = fiobj_obj2cstr(fiobj_hash_get(paths, key)).data;
@@ -257,10 +272,15 @@ void initialize_http_service(void) {
         fiobj_free(key);
       }
     }
+    // Load tool_support list from config if present
+    load_tool_support_from_config(container);
   }
   fiobj_free(endpoints_key);
   fiobj_free(container);
   fiobj_free(holder);
+
+  // Fetch available models from Ollama at startup
+  load_models_from_ollama();
 
   if (http_listen(fio_cli_get("-p"), fio_cli_get("-b"),
                   .on_request = on_http_request,
