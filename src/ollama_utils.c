@@ -23,34 +23,29 @@ char* newest_message_from_request(const char* request)
     return NULL;
 }
 
-bool set_llm_req_opt(char* optkey_s, FIOBJ value, char* req_handle)
+bool set_llm_req_opt(char* optkey_s, FIOBJ value, char** req_handle)
 {
-    if(req_handle == NULL)
+    if(req_handle == NULL || *req_handle == NULL)
     {
         log_debug("req_handle is either NULL or undefined, couldnt set");
         return false;
     }
     FIOBJ req_handle_obj = FIOBJ_INVALID;
-    fiobj_json2obj(&req_handle_obj, req_handle, strlen(req_handle));
+    fiobj_json2obj(&req_handle_obj, *req_handle, strlen(*req_handle));
     FIOBJ optkey = fiobj_str_new("options", 7);
     FIOBJ opt_hash = fiobj_hash_get(req_handle_obj, optkey);
-    fiobj_free(optkey);
     if(opt_hash == FIOBJ_INVALID)
     {
-        opt_hash = fiobj_hash_new();
+        FIOBJ new_opt = fiobj_hash_new();
+        fiobj_hash_set(req_handle_obj, optkey, new_opt);
+        // Re-fetch the hash from req_handle_obj since hash_set took ownership
+        opt_hash = fiobj_hash_get(req_handle_obj, optkey);
     }
     FIOBJ key_obj = fiobj_str_new(optkey_s, strlen(optkey_s));
     int valres = fiobj_hash_set(opt_hash, key_obj, value);
-    log_debug("%s", fiobj_obj2cstr(fiobj_obj2json(opt_hash, 0)).data);
-    FIOBJ optkey2 = fiobj_str_new("options", 7);
-    fiobj_hash_replace(req_handle_obj, optkey2, opt_hash);
-    FIOBJ req_handle_str = fiobj_obj2json(req_handle_obj, 0);
-    req_handle = fiobj_obj2cstr(req_handle_str).data;
-    fiobj_free(req_handle_obj);
-    fiobj_free(optkey);
-    fiobj_free(opt_hash);
     fiobj_free(key_obj);
-    fiobj_free(req_handle_str);
+    fiobj_free(optkey);
+    *req_handle = fiobj_obj2cstr(fiobj_obj2json(req_handle_obj, 0)).data;
     return valres != -1;
 }
 
@@ -89,8 +84,7 @@ void push_on_top_curr_req_messages(FIOBJ message, char** req_handle)
     fiobj_free(messagekey);
     *req_handle = fiobj_obj2cstr(fiobj_obj2json(ollama_req, 0)).data;
     fiobj_free(message_arr);
-    fiobj_free(tmp_message_arr);
-    fiobj_free(ollama_req);
+    // Note: do NOT free tmp_message_arr here — fiobj_hash_set already took ownership
 }
 
 void apnd_syssec2req(FIOBJ container, char** req_handle)

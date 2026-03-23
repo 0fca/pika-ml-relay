@@ -4,3 +4,6 @@ size_t write_curl_callback(void* ptr, size_t size, size_t nmemb, FILE* fp);
 void download_tool(char *tool_url, char *name, char* token);
 bool supports_tools(char* model);
 void extract_model(char** model, char* request);
+void load_models_from_ollama(void);
+void load_tool_support_from_config(FIOBJ config);
+FIOBJ get_models_json(void);
