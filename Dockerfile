@@ -7,6 +7,7 @@ COPY misc /app/misc
 COPY config.json /app/config.json
 COPY makefile /app/makefile
 RUN mkdir /app/www
+RUN mkdir -p /app/log
 
 RUN apt-get update
 RUN apt-get -y install make gcc libcurl4-gnutls-dev zlib1g zlib1g-dev build-essential libffi-dev\
@@ -15,4 +16,5 @@ WORKDIR /app
 RUN make
 WORKDIR /app/tools
 RUN pip install chromadb requests
-ENTRYPOINT [ "/app/tmp/pika_ml_relay", "-w=2", "-t=8", "-cfg=/app/config.json", "-ping=5", "-llog=1", "-www=/app/www" ]
+WORKDIR /app
+ENTRYPOINT [ "/app/tmp/pika_ml_relay", "-w=1", "-t=8", "-cfg=/app/config.json", "-ping=5", "-llog=1" ,"-www=/app/www", "-v"]
