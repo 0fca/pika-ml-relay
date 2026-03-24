@@ -203,9 +203,18 @@ int iterate_over_args(FIOBJ o, void* parsed)
     {
         param = fiobj_obj2cstr(o).data;
     }
+    else if (fiobj_type_is(o, FIOBJ_T_ARRAY) == 1)
+    {
+        // Recurse into array elements individually
+        for (size_t i = 0; i < fiobj_ary_count(o); i++)
+        {
+            iterate_over_args(fiobj_ary_index(o, (int64_t)i), parsed);
+        }
+        return 0;
+    }
     else
     {
-        // Hash, Array, or other complex type — serialize to JSON
+        // Hash or other complex type — serialize to JSON
         json_str = fiobj_obj2json(o, 0);
         if (json_str != FIOBJ_INVALID)
         {
